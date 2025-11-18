@@ -199,7 +199,7 @@ class AdditiveTreeBuilder:
         edges_with_weights = [(u, v, self.Mh[u, v]) for u, v in T.edges()]
         edges_with_weights.sort(key=lambda x: x[2], reverse=True)
         
-        description = f"Arco de mayor peso: {self.labels[max_edge[0]]}{self.labels[max_edge[1]]} (peso: {max_weight:.3f})\n"
+        description = f"Arco de mayor peso: {self.labels[max_edge[0]]}{self.labels[max_edge[1]]} (peso: {max_weight:.2f})\n"
         description += f"Matriz muestra el arco de mayor peso usado en el camino entre cada par de nodos."
         self.cw=path_matrix
         return {
@@ -216,14 +216,31 @@ class AdditiveTreeBuilder:
         }
     
     def _calculate_cw(self) -> Dict[str, Any]:
-        """Paso 4: Calcular Cw para cada arco sumando distancias de pares que lo usan."""
+        """Paso 4: Calcular Cw para cada arco usando el máximo de distancias de pares que lo usan."""
+        # Obtener la matriz de arcos del paso 3
+        if not hasattr(self, 'cw') or self.cw is None:
+            # Si no hay matriz del paso 3, retornar vacío
+            return {
+                'step': 4,
+                'title': 'Paso 4: Cálculo de Cw para cada Arco',
+                'graph': None,
+                'matrix': None,
+                'calculation_texts': [],
+                'description': 'Error: No se encontró la matriz del paso 3',
+                'cw_values': {},
+                'edges_info': [],
+                'edge_pairs': {}
+            }
+        
+        path_matrix = self.cw
+        
         # Obtener spanning tree
         G_full = nx.Graph()
         for i in range(self.n):
             G_full.add_node(i, label=self.labels[i])
         for i in range(self.n):
             for j in range(i + 1, self.n):
-                G_full.add_edge(i, j, weight=self.Ml[i, j])
+                G_full.add_edge(i, j, weight=self.Mh[i, j])
         
         T = nx.minimum_spanning_tree(G_full, weight='weight', algorithm='kruskal')
         # Copiar labels a T
@@ -233,61 +250,66 @@ class AdditiveTreeBuilder:
             elif node < len(self.labels):
                 T.nodes[node]['label'] = self.labels[node]
         
-        # Para cada arco del spanning tree, encontrar todos los pares de nodos
-        # cuyo camino pasa por ese arco, y sumar sus distancias de Ml
+        # Extraer los arcos únicos que aparecen en la matriz del paso 3
+        unique_edges = set()
+        for i in range(self.n):
+            for j in range(i + 1, self.n):
+                cell_value = path_matrix[i, j]
+                if cell_value != '-' and isinstance(cell_value, str):
+                    # Extraer el arco del formato (AB)
+                    edge_str = cell_value.strip('()')
+                    if edge_str:
+                        # Encontrar los índices de los nodos
+                        # El formato es (labelU labelV)
+                        for u in range(self.n):
+                            for v in range(u + 1, self.n):
+                                label_u = self.labels[u]
+                                label_v = self.labels[v]
+                                if edge_str == f"{label_u}{label_v}" or edge_str == f"{label_v}{label_u}":
+                                    unique_edges.add(tuple(sorted([u, v])))
+        
+        # Calcular Cw solo para los arcos únicos
         cw_values = {}
         edges_info = []
-        edge_pairs = {}  # Para cada arco, lista de pares que lo usan
+        edge_pairs = {}
         
-        # Crear matriz de cálculo de Cw
-        # Filas: arcos, Columnas: información del cálculo
-        max_pairs = 0
-        for edge in T.edges():
-            u, v = edge
-            edge_key = tuple(sorted(edge))
+        for edge_key in unique_edges:
+            u, v = edge_key
             
             # Encontrar todos los pares de nodos cuyo camino pasa por este arco
+            # según la matriz del paso 3
             pairs_using_edge = []
             distances_list = []
-            cw_sum = 0.0
             
-            # Dividir el árbol en dos componentes al remover este arco
-            T_copy = T.copy()
-            T_copy.remove_edge(u, v)
-            
-            # Encontrar componentes conectadas
-            components = list(nx.connected_components(T_copy))
-            if len(components) == 2:
-                comp1, comp2 = components
-                # Todos los pares entre comp1 y comp2 pasan por el arco (u,v)
-                for node1 in comp1:
-                    for node2 in comp2:
-                        pairs_using_edge.append((node1, node2))
-                        dist = self.Ml[node1, node2]
-                        distances_list.append(dist)
-                        cw_sum += dist
-            
-            max_pairs = max(max_pairs, len(pairs_using_edge))
-            cw_values[edge_key] = cw_sum
-            edge_pairs[edge_key] = pairs_using_edge
-            
-            # Crear información del arco con formato detallado
+            # Buscar en la matriz del paso 3 qué pares usan este arco
             label_u = self.labels[u]
             label_v = self.labels[v]
+            edge_label = f"{label_u}{label_v}"
+            
+            for i in range(self.n):
+                for j in range(i + 1, self.n):
+                    cell_value = path_matrix[i, j]
+                    if cell_value == f"({edge_label})" or cell_value == f"({label_v}{label_u})":
+                        pairs_using_edge.append((i, j))
+                        dist = self.Ml[i, j]
+                        distances_list.append(dist)
+            
+            # Encontrar el valor MÁXIMO de las distancias (no la suma)
+            max_dist = max(distances_list) if distances_list else 0.0
+            
+            cw_values[edge_key] = max_dist
+            edge_pairs[edge_key] = pairs_using_edge
             
             # Formatear pares y distancias
             pairs_labels = [f"{self.labels[p[0]]}{self.labels[p[1]]}" for p in pairs_using_edge]
             pairs_str = '; '.join(pairs_labels)
-            distances_str = '{' + ', '.join([f"{d:.3f}" for d in distances_list]) + '}'
-            
-            # Encontrar el valor máximo de las distancias
-            max_dist = max(distances_list) if distances_list else 0.0
+            distances_str = '{' + ', '.join([f"{d:.2f}" for d in distances_list]) + '}'
             
             edges_info.append({
-                'edge': edge,
-                'edge_label': f"{label_u}{label_v}",
-                'weight_Mh': self.Ml[u, v],
-                'Cw': cw_sum,
+                'edge': (u, v),
+                'edge_label': edge_label,
+                'weight_Mh': self.Mh[u, v],
+                'Cw': max_dist,
                 'pairs_count': len(pairs_using_edge),
                 'pairs': pairs_using_edge,
                 'pairs_labels': pairs_labels,
@@ -298,24 +320,23 @@ class AdditiveTreeBuilder:
             })
         
         # Crear información de cálculo para renderizado como texto
-        # No crear matriz, solo información estructurada
         calculation_texts = []
         
         for info in edges_info:
-            # Formato: CW[AG] = {AC; AB; AD} = {1.000, 2.000, 3.000} → Máximo: 3.000
+            # Formato: CW[AB] = {AC; AE; BC; BD; BE} = {4.000, 5.000, 3.000, 4.000, 5.000, 4.000} → Max: 5.000
             calc_text = f"CW[{info['edge_label']}] = "
             calc_text += '{' + info['pairs_str'] + '} = '
             calc_text += info['distances_str']
-            calc_text += f" → Máximo: {info['max_distance']:.3f}"
+            calc_text += f" → Max: {info['max_distance']:.2f}"
             calculation_texts.append(calc_text)
         
         # Crear descripción detallada
-        description = f"Cálculo de Cw para {len(edges_info)} arcos:\n\n"
+        description = f"Cálculo de Cw para {len(edges_info)} arcos únicos del paso 3:\n\n"
         for info in edges_info:
             description += f"CW[{info['edge_label']}] = "
             description += '{' + info['pairs_str'] + '} = '
             description += info['distances_str']
-            description += f" → Máximo: {info['max_distance']:.3f}\n"
+            description += f" → Max: {info['max_distance']:.2f}\n"
         
         return {
             'step': 4,
@@ -330,45 +351,107 @@ class AdditiveTreeBuilder:
         }
     
     def _create_cw_matrix(self) -> Dict[str, Any]:
-        """Paso 5: Crear matriz con resultados de Cw."""
-        # Obtener spanning tree y valores Cw
-        G_full = nx.Graph()
-        for i in range(self.n):
-            
-            G_full.add_node(i, label=self.labels[i])
+        """Paso 5: Crear matriz con resultados de Cw mostrando los valores numéricos máximos."""
+        # Obtener la matriz de arcos del paso 3 y los valores Cw del paso 4
+        if not hasattr(self, 'cw') or self.cw is None:
+            # Si no hay matriz del paso 3, retornar matriz vacía
+            return {
+                'step': 5,
+                'title': 'Paso 5: Matriz con Resultados de Cw',
+                'graph': None,
+                'matrix': np.zeros((self.n, self.n)),
+                'description': 'Error: No se encontró la matriz del paso 3',
+                'cw_matrix': np.zeros((self.n, self.n)),
+                'cw_values': {}
+            }
+        
+        path_matrix = self.cw
+        
+        # Obtener los valores Cw calculados en el paso 4
+        # Necesitamos recalcular o usar los valores del paso anterior
+        # Extraer los arcos únicos y sus valores Cw
+        unique_edges_cw = {}
+        
+        # Extraer los arcos únicos que aparecen en la matriz del paso 3
         for i in range(self.n):
             for j in range(i + 1, self.n):
-                G_full.add_edge(i, j, weight=self.Mh[i, j])
+                cell_value = path_matrix[i, j]
+                if cell_value != '-' and isinstance(cell_value, str):
+                    edge_str = cell_value.strip('()')
+                    if edge_str:
+                        # Encontrar los índices de los nodos
+                        for u in range(self.n):
+                            for v in range(u + 1, self.n):
+                                label_u = self.labels[u]
+                                label_v = self.labels[v]
+                                if edge_str == f"{label_u}{label_v}" or edge_str == f"{label_v}{label_u}":
+                                    edge_key = tuple(sorted([u, v]))
+                                    if edge_key not in unique_edges_cw:
+                                        # Calcular Cw para este arco
+                                        distances_list = []
+                                        
+                                        # Buscar qué pares usan este arco
+                                        for ii in range(self.n):
+                                            for jj in range(ii + 1, self.n):
+                                                cell_val = path_matrix[ii, jj]
+                                                if cell_val == f"({label_u}{label_v})" or cell_val == f"({label_v}{label_u})":
+                                                    dist = self.Ml[ii, jj]
+                                                    distances_list.append(dist)
+                                        
+                                        max_dist = max(distances_list) if distances_list else 0.0
+                                        unique_edges_cw[edge_key] = max_dist
         
-        T = nx.minimum_spanning_tree(G_full, weight='weight', algorithm='kruskal')
-        # Copiar labels a T
-        for node in T.nodes():
-            if node in G_full.nodes() and 'label' in G_full.nodes[node]:
-                T.nodes[node]['label'] = G_full.nodes[node]['label']
-            elif node < len(self.labels):
-                T.nodes[node]['label'] = self.labels[node]
+        # Crear matriz resultado con los valores numéricos de Cw
+        cw_result_matrix = np.zeros((self.n, self.n), dtype=object)
         
-        # Crear matriz Cw (inicialmente con distancias de Ml)
-        cw_matrix = self.Ml.copy()
+        for i in range(self.n):
+            for j in range(self.n):
+                if i >= j:
+                    cw_result_matrix[i, j] = '-'
+                else:
+                    # Obtener el arco que se usa para este par
+                    cell_value = path_matrix[i, j]
+                    if cell_value != '-' and isinstance(cell_value, str):
+                        edge_str = cell_value.strip('()')
+                        if edge_str:
+                            # Buscar el valor Cw de este arco
+                            for edge_key, cw_value in unique_edges_cw.items():
+                                u, v = edge_key
+                                label_u = self.labels[u]
+                                label_v = self.labels[v]
+                                if edge_str == f"{label_u}{label_v}" or edge_str == f"{label_v}{label_u}":
+                                    # Mostrar el valor numérico de Cw
+                                    cw_result_matrix[i, j] = cw_value
+                                    break
+                            else:
+                                cw_result_matrix[i, j] = '-'
+                        else:
+                            cw_result_matrix[i, j] = '-'
+                    else:
+                        cw_result_matrix[i, j] = '-'
         
-        # Marcar arcos del spanning tree con sus valores Cw
-        cw_values = {}
-        for u, v in T.edges():
-            cw = self.Ml[u, v]
-            cw_values[(u, v)] = cw
+        # Crear descripción con los valores Cw
+        description = "Matriz con valores Cw (máximos) para cada par de nodos:\n\n"
+        description += "Valores Cw calculados por arco:\n"
+        for edge_key, cw_value in sorted(unique_edges_cw.items(), key=lambda x: x[1], reverse=True):
+            u, v = edge_key
+            label_u = self.labels[u]
+            label_v = self.labels[v]
+            description += f"  ({label_u}{label_v}): Cw = {cw_value:.2f}\n"
         
         return {
             'step': 5,
             'title': 'Paso 5: Matriz con Resultados de Cw',
-            'graph': T,
-            'matrix': cw_matrix,
-            'description': 'Matriz de distancias (Ml) que representa los valores Cw',
-            'cw_matrix': cw_matrix,
-            'cw_values': cw_values
+            'graph': None,
+            'matrix': cw_result_matrix,
+            'description': description,
+            'cw_matrix': cw_result_matrix,
+            'cw_values': unique_edges_cw,
+            'cw_result_matrix': cw_result_matrix  # Matriz con valores numéricos
         }
     
     def _create_final_tree(self) -> Dict[str, Any]:
-        """Paso 6: Crear árbol final."""
+        """Paso 6: Crear árbol final usando valores máximos de Cw del paso 5."""
         # Obtener spanning tree
         G_full = nx.Graph()
         for i in range(self.n):
@@ -385,73 +468,105 @@ class AdditiveTreeBuilder:
             elif node < len(self.labels):
                 T.nodes[node]['label'] = self.labels[node]
         
-        # Calcular valores Cw para cada arco (igual que en paso 4)
+        # Obtener valores Cw MÁXIMOS del paso 5 (no suma)
+        if not hasattr(self, 'cw') or self.cw is None:
+            return {
+                'step': 6,
+                'title': 'Paso 6: Árbol Aditivo Final',
+                'graph': T,
+                'tree': T,
+                'matrix': None,
+                'description': 'Error: No se encontró información del paso 3',
+                'cw_values': {},
+                'max_cw_edge': None,
+                'max_cw_value': 0,
+                'edge_distances': {}
+            }
+        
+        path_matrix = self.cw
+        
+        # Calcular valores Cw MÁXIMOS para cada arco (igual que en paso 4 y 5)
         cw_values = {}
-        for edge in T.edges():
-            u, v = edge
-            edge_key = tuple(sorted(edge))
-            
-            # Dividir el árbol en dos componentes al remover este arco
-            T_copy = T.copy()
-            T_copy.remove_edge(u, v)
-            components = list(nx.connected_components(T_copy))
-            
-            cw_sum = 0.0
-            if len(components) == 2:
-                comp1, comp2 = components
-                for node1 in comp1:
-                    for node2 in comp2:
-                        cw_sum += self.Ml[node1, node2]
-            
-            cw_values[edge_key] = cw_sum
+        unique_edges_cw = {}
         
-        # Encontrar el arco con mayor Cw (nodo más lejano)
-        max_cw_edge = max(cw_values.items(), key=lambda x: x[1])
-        max_cw_value = max_cw_edge[1]
-        max_edge = max_cw_edge[0]
+        # Extraer los arcos únicos que aparecen en la matriz del paso 3
+        for i in range(self.n):
+            for j in range(i + 1, self.n):
+                cell_value = path_matrix[i, j]
+                if cell_value != '-' and isinstance(cell_value, str):
+                    edge_str = cell_value.strip('()')
+                    if edge_str:
+                        # Encontrar los índices de los nodos
+                        for u in range(self.n):
+                            for v in range(u + 1, self.n):
+                                label_u = self.labels[u]
+                                label_v = self.labels[v]
+                                if edge_str == f"{label_u}{label_v}" or edge_str == f"{label_v}{label_u}":
+                                    edge_key = tuple(sorted([u, v]))
+                                    if edge_key not in unique_edges_cw:
+                                        # Calcular Cw MÁXIMO para este arco
+                                        distances_list = []
+                                        
+                                        # Buscar qué pares usan este arco
+                                        for ii in range(self.n):
+                                            for jj in range(ii + 1, self.n):
+                                                cell_val = path_matrix[ii, jj]
+                                                if cell_val == f"({label_u}{label_v})" or cell_val == f"({label_v}{label_u})":
+                                                    dist = self.Ml[ii, jj]
+                                                    distances_list.append(dist)
+                                        
+                                        max_dist = max(distances_list) if distances_list else 0.0
+                                        unique_edges_cw[edge_key] = max_dist
         
-        # Distribuir valores: dividir el valor máximo entre los dos lados
+        cw_values = unique_edges_cw
+        
+        # Encontrar el arco con mayor Cw (valor máximo)
+        if cw_values:
+            max_cw_edge = max(cw_values.items(), key=lambda x: x[1])
+            max_cw_value = max_cw_edge[1]
+            max_edge = max_cw_edge[0]
+        else:
+            max_edge = None
+            max_cw_value = 0
+        
+        # Distribuir valores: usar los valores máximos de Cw
         edge_distances = {}
         distribution_info = []
         
-        for edge in T.edges():
-            u, v = edge
-            edge_key = tuple(sorted(edge))
-            cw = cw_values[edge_key]
+        for edge_key, cw_max in cw_values.items():
+            u, v = edge_key
             
-            # Si es el arco con mayor Cw, dividir por 2
+            # Usar el valor máximo de Cw directamente, dividido por 2 para cada lado
+            dist_u = cw_max / 2.0
+            dist_v = cw_max / 2.0
+            edge_distances[edge_key] = (dist_u, dist_v)
+            
+            label_u = self.labels[u]
+            label_v = self.labels[v]
+            
             if edge_key == max_edge:
-                dist_u = max_cw_value / 2.0
-                dist_v = max_cw_value / 2.0
-                edge_distances[edge_key] = (dist_u, dist_v)
-                label_u = self.labels[u]
-                label_v = self.labels[v]
                 distribution_info.append(
-                    f"Arco {label_u}{label_v}: Cw={cw:.3f} (máximo) → "
-                    f"Dividido: {dist_u:.3f} por lado"
+                    f"Arco {label_u}{label_v}: Cw={cw_max:.2f} (máximo) → "
+                    f"Distancia por lado: {dist_u:.2f}"
                 )
             else:
-                # Para otros arcos, usar una proporción del Cw
-                dist = cw / 2.0
-                edge_distances[edge_key] = (dist, dist)
-                label_u = self.labels[u]
-                label_v = self.labels[v]
                 distribution_info.append(
-                    f"Arco {label_u}{label_v}: Cw={cw:.3f} → "
-                    f"Distancia: {dist:.3f}"
+                    f"Arco {label_u}{label_v}: Cw={cw_max:.2f} → "
+                    f"Distancia por lado: {dist_u:.2f}"
                 )
             
-            # Asignar distancia al arco (usar el promedio de las dos distancias)
-            avg_dist = sum(edge_distances[edge_key]) / 2.0
-            T[u][v]['distance'] = avg_dist
-            T[u][v]['weight'] = self.Mh[u, v]
-            T[u][v]['cw'] = cw
+            # Asignar distancia al arco en el grafo
+            if T.has_edge(u, v):
+                T[u][v]['distance'] = dist_u  # Usar dist_u como la distancia del arco
+                T[u][v]['weight'] = self.Mh[u, v]
+                T[u][v]['cw'] = cw_max
         
-        description = f"Árbol Aditivo Final\n\n"
-        description += f"Arco con mayor Cw: {self.labels[max_edge[0]]}{self.labels[max_edge[1]]} "
-        description += f"(Cw = {max_cw_value:.3f})\n"
-        description += f"Valor dividido: {max_cw_value/2.0:.3f} por cada lado\n\n"
-        description += "Distribución de valores:\n"
+        description = "Árbol Aditivo Final\n\n"
+        if max_edge:
+            description += f"Arco con mayor Cw: {self.labels[max_edge[0]]}{self.labels[max_edge[1]]} "
+            description += f"(Cw = {max_cw_value:.2f})\n"
+            description += f"Distancia por lado: {max_cw_value/2.0:.2f}\n\n"
+        description += "Distribución de valores (usando máximos de Cw):\n"
         for info in distribution_info:
             description += f"  {info}\n"
         
@@ -465,7 +580,8 @@ class AdditiveTreeBuilder:
             'cw_values': cw_values,
             'max_cw_edge': max_edge,
             'max_cw_value': max_cw_value,
-            'edge_distances': edge_distances
+            'edge_distances': edge_distances,
+            'is_additive_tree': True  # Indicador para usar visualización especial
         }
     
     def get_step(self, step_index: int) -> Dict[str, Any]:

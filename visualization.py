@@ -73,6 +73,141 @@ def draw_graph(graph: nx.Graph, ax: Optional[plt.Axes] = None,
     return fig
 
 
+def draw_additive_tree(tree: nx.Graph, ax: Optional[plt.Axes] = None,
+                       title: str = "", node_labels: Optional[Dict] = None,
+                       edge_labels: Optional[Dict] = None) -> plt.Figure:
+    """
+    Dibuja un árbol aditivo con nodos en línea recta y aristas en forma de V.
+    
+    Args:
+        tree: Árbol de networkx
+        ax: Ejes de matplotlib
+        title: Título del gráfico
+        node_labels: Etiquetas de nodos
+        edge_labels: Etiquetas de arcos (distancias)
+        
+    Returns:
+        Figura de matplotlib
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(12, 8))
+    else:
+        fig = ax.figure
+    
+    ax.clear()
+    
+    # Posicionar nodos en una línea horizontal
+    nodes = list(tree.nodes())
+    n = len(nodes)
+    pos = {}
+    
+    # Distribuir nodos uniformemente en una línea horizontal (y=0)
+    for i, node in enumerate(nodes):
+        x = (i - (n-1)/2) * 2  # Centrar en x=0
+        pos[node] = (x, 0)
+    
+    # Para cada arista, crear un punto medio en forma de V
+    # Crear un grafo modificado para visualización con nodos intermedios
+    display_graph = nx.Graph()
+    display_pos = {}
+    display_labels = {}
+    edge_label_pos = {}
+    edge_label_text = {}
+    
+    # Agregar nodos originales
+    for node in nodes:
+        display_graph.add_node(node)
+        display_pos[node] = pos[node]
+        if node_labels and node in node_labels:
+            display_labels[node] = node_labels[node]
+        else:
+            label = tree.nodes[node].get('label', str(node))
+            display_labels[node] = str(label)
+    
+    # Agregar nodos intermedios y aristas en V
+    intermediate_node_id = max(nodes) + 1 if nodes else 0
+    
+    for u, v in tree.edges():
+        # Crear nodo intermedio arriba del punto medio
+        mid_x = (pos[u][0] + pos[v][0]) / 2
+        mid_y = 2.0  # Altura de la V
+        
+        intermediate_node = f"int_{intermediate_node_id}"
+        intermediate_node_id += 1
+        
+        display_graph.add_node(intermediate_node)
+        display_pos[intermediate_node] = (mid_x, mid_y)
+        display_labels[intermediate_node] = ""  # Sin etiqueta para nodo intermedio
+        
+        # Agregar aristas desde nodos originales al intermedio
+        display_graph.add_edge(u, intermediate_node)
+        display_graph.add_edge(v, intermediate_node)
+        
+        # Etiquetas de distancia
+        if edge_labels and (u, v) in edge_labels:
+            dist_text = edge_labels[(u, v)]
+        elif edge_labels and (v, u) in edge_labels:
+            dist_text = edge_labels[(v, u)]
+        elif 'distance' in tree[u][v]:
+            dist_text = f"{tree[u][v]['distance']:.2f}"
+        elif 'weight' in tree[u][v]:
+            dist_text = f"{tree[u][v]['weight']:.2f}"
+        else:
+            dist_text = ""
+        
+        # Posicionar etiqueta en el punto medio de cada rama de la V
+        if dist_text:
+            # Etiqueta para rama izquierda (u -> intermedio)
+            edge_label_pos[(u, intermediate_node)] = (
+                (pos[u][0] + mid_x) / 2,
+                (0 + mid_y) / 2
+            )
+            edge_label_text[(u, intermediate_node)] = dist_text
+            
+            # Etiqueta para rama derecha (v -> intermedio)
+            edge_label_pos[(v, intermediate_node)] = (
+                (pos[v][0] + mid_x) / 2,
+                (0 + mid_y) / 2
+            )
+            edge_label_text[(v, intermediate_node)] = dist_text
+    
+    # Dibujar nodos originales (en la línea)
+    original_nodes = [n for n in display_graph.nodes() if not str(n).startswith('int_')]
+    nx.draw_networkx_nodes(display_graph, display_pos, nodelist=original_nodes,
+                          ax=ax, node_color='lightgreen', node_size=1000, alpha=0.9)
+    
+    # Dibujar nodos intermedios (puntos pequeños)
+    intermediate_nodes = [n for n in display_graph.nodes() if str(n).startswith('int_')]
+    if intermediate_nodes:
+        nx.draw_networkx_nodes(display_graph, display_pos, nodelist=intermediate_nodes,
+                              ax=ax, node_color='gray', node_size=50, alpha=0.5)
+    
+    # Dibujar aristas
+    nx.draw_networkx_edges(display_graph, display_pos, ax=ax, alpha=0.7, width=2, 
+                          edge_color='gray')
+    
+    # Etiquetas de nodos originales
+    nx.draw_networkx_labels(display_graph, display_pos, display_labels, ax=ax, 
+                           font_size=11, font_weight='bold')
+    
+    # Etiquetas de distancias
+    for edge, pos_label in edge_label_pos.items():
+        ax.text(pos_label[0], pos_label[1], edge_label_text[edge],
+               fontsize=9, ha='center', va='center',
+               bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8, edgecolor='gray'))
+    
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.axis('off')
+    
+    # Ajustar límites para mostrar todo el árbol
+    ax.set_xlim(min(p[0] for p in display_pos.values()) - 1, 
+                max(p[0] for p in display_pos.values()) + 1)
+    ax.set_ylim(-0.5, max(p[1] for p in display_pos.values()) + 1)
+    
+    plt.tight_layout()
+    return fig
+
+
 def draw_tree(tree: nx.Graph, ax: Optional[plt.Axes] = None,
               title: str = "", node_labels: Optional[Dict] = None,
               edge_labels: Optional[Dict] = None) -> plt.Figure:
@@ -182,7 +317,7 @@ def draw_matrix(matrix: np.ndarray, ax: Optional[plt.Axes] = None,
             if isinstance(val, str):
                 row_data.append(val)
             elif isinstance(val, (int, float, np.number)):
-                row_data.append(f'{val:.3f}')
+                row_data.append(f'{val:.2f}')
             else:
                 row_data.append(str(val))
         table_data.append(row_data)
@@ -296,9 +431,9 @@ def draw_calculation_text(calculation_texts: List[str], ax: Optional[plt.Axes] =
         # Resaltar el valor máximo a la derecha, separado
         if result:
             # Extraer solo el número del máximo
-            max_value = result.replace("Máximo: ", "").strip()
+            max_value = result.replace("Max: ", "").replace("Máximo: ", "").strip()
             # Dibujar el valor máximo resaltado a la derecha
-            ax.text(0.95, y_pos, f"→ Max: {max_value}", ha='right', va='center',
+            ax.text(0.95, y_pos, f"→ Máx: {max_value}", ha='right', va='center',
                    fontsize=font_size, fontweight='bold', color='#D32F2F',
                    fontfamily='monospace', transform=ax.transAxes,
                    bbox=dict(boxstyle='round,pad=0.1', facecolor='#FFEBEE', 

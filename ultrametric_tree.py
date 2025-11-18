@@ -148,7 +148,7 @@ class UltrametricTreeBuilder:
         Q(i,j) = (n-2)*d(i,j) - sum(d(i,k)) - sum(d(j,k))
         """
         n = matrix.shape[0]
-        Q = np.zeros_like(matrix)
+        Q = np.zeros_like(matrix, dtype=float)
         
         for i in range(n):
             for j in range(i + 1, n):
