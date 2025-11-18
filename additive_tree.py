@@ -23,6 +23,7 @@ class AdditiveTreeBuilder:
         self.Mh = Mh.copy()
         self.Ml = Ml.copy()
         self.n = Mh.shape[0]
+        self.cw= Mh.shape[0]
         self.labels = labels if labels else [f'Node {i+1}' for i in range(self.n)]
         self.steps = []
         self.current_step = 0
@@ -163,7 +164,7 @@ class AdditiveTreeBuilder:
         
         for i in range(self.n):
             for j in range(self.n):
-                if i == j:
+                if i >= j:
                     path_matrix[i, j] = '-'
                 else:
                     # Encontrar camino entre i y j
@@ -200,7 +201,7 @@ class AdditiveTreeBuilder:
         
         description = f"Arco de mayor peso: {self.labels[max_edge[0]]}{self.labels[max_edge[1]]} (peso: {max_weight:.3f})\n"
         description += f"Matriz muestra el arco de mayor peso usado en el camino entre cada par de nodos."
-        
+        self.cw=path_matrix
         return {
             'step': 3,
             'title': 'Paso 3: Matriz con Arcos de Mayor Valor',
@@ -222,7 +223,7 @@ class AdditiveTreeBuilder:
             G_full.add_node(i, label=self.labels[i])
         for i in range(self.n):
             for j in range(i + 1, self.n):
-                G_full.add_edge(i, j, weight=self.Mh[i, j])
+                G_full.add_edge(i, j, weight=self.Ml[i, j])
         
         T = nx.minimum_spanning_tree(G_full, weight='weight', algorithm='kruskal')
         # Copiar labels a T
@@ -285,7 +286,7 @@ class AdditiveTreeBuilder:
             edges_info.append({
                 'edge': edge,
                 'edge_label': f"{label_u}{label_v}",
-                'weight_Mh': self.Mh[u, v],
+                'weight_Mh': self.Ml[u, v],
                 'Cw': cw_sum,
                 'pairs_count': len(pairs_using_edge),
                 'pairs': pairs_using_edge,
@@ -333,6 +334,7 @@ class AdditiveTreeBuilder:
         # Obtener spanning tree y valores Cw
         G_full = nx.Graph()
         for i in range(self.n):
+            
             G_full.add_node(i, label=self.labels[i])
         for i in range(self.n):
             for j in range(i + 1, self.n):
@@ -374,7 +376,7 @@ class AdditiveTreeBuilder:
         for i in range(self.n):
             for j in range(i + 1, self.n):
                 G_full.add_edge(i, j, weight=self.Mh[i, j])
-        
+
         T = nx.minimum_spanning_tree(G_full, weight='weight', algorithm='kruskal')
         # Copiar labels a T
         for node in T.nodes():
