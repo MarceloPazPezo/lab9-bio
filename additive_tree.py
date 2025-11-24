@@ -1,5 +1,7 @@
 """
 Módulo para construcción de árboles aditivos.
+Algoritmo que toma una matriz de distancias y construye el árbol nodo por nodo,
+resolviendo sistemas de ecuaciones para cada nodo interno.
 """
 import numpy as np
 import networkx as nx
@@ -9,24 +11,24 @@ from typing import List, Dict, Tuple, Any, Optional
 class AdditiveTreeBuilder:
     """
     Constructor de árboles aditivos paso a paso.
+    Dada una matriz de distancias, construye el árbol incrementalmente,
+    resolviendo sistemas de ecuaciones para cada nodo interno.
     """
     
-    def __init__(self, Mh: np.ndarray, Ml: np.ndarray, labels: Optional[List[str]] = None):
+    def __init__(self, distance_matrix: np.ndarray, labels: Optional[List[str]] = None):
         """
-        Inicializa el constructor con las matrices de pesos y distancias.
+        Inicializa el constructor con la matriz de distancias.
         
         Args:
-            Mh: Matriz de pesos (pesos de los arcos)
-            Ml: Matriz de distancias (distancias entre nodos)
+            distance_matrix: Matriz de distancias entre nodos
             labels: Etiquetas para los nodos (opcional)
         """
-        self.Mh = Mh.copy()
-        self.Ml = Ml.copy()
-        self.n = Mh.shape[0]
-        self.cw= Mh.shape[0]
+        self.distance_matrix = distance_matrix.copy()
+        self.n = distance_matrix.shape[0]
         self.labels = labels if labels else [f'Node {i+1}' for i in range(self.n)]
         self.steps = []
-        self.current_step = 0
+        self.tree = nx.Graph()
+        self.node_counter = self.n
         
     def build(self) -> List[Dict[str, Any]]:
         """
@@ -36,553 +38,532 @@ class AdditiveTreeBuilder:
             Lista de pasos con información para visualización
         """
         self.steps = []
+        self.tree = nx.Graph()
         
-        # Paso 1: Grafo inicial desde Mh
-        step1 = self._create_initial_graph()
+        # Paso 0: Mostrar matriz inicial
+        step0 = {
+            'step': 0,
+            'title': 'Paso 0: Matriz de Distancias Inicial',
+            'matrix': self.distance_matrix.copy(),
+            'description': f'Matriz de distancias inicial con {self.n} nodos',
+            'tree': self.tree.copy()
+        }
+        self.steps.append(step0)
+        
+        if self.n < 2:
+            return self.steps
+        
+        # Paso 1: Inicializar con los primeros dos nodos
+        self.tree.add_node(0, label=self.labels[0], is_leaf=True)
+        self.tree.add_node(1, label=self.labels[1], is_leaf=True)
+        distance_01 = self.distance_matrix[0, 1]
+        self.tree.add_edge(0, 1, distance=distance_01)
+        
+        description = f"Paso 1: Inicialización\n\n"
+        description += f"Se conectan los primeros dos nodos del árbol:\n"
+        description += f"- Nodo {self.labels[0]} ↔ Nodo {self.labels[1]}\n"
+        description += f"- Distancia: {distance_01:.2f}\n\n"
+        description += f"Este es el árbol inicial con 2 nodos conectados directamente."
+        
+        step1 = {
+            'step': 1,
+            'title': f'Paso 1: Inicialización - Conectar {self.labels[0]} y {self.labels[1]}',
+            'matrix': self.distance_matrix.copy(),
+            'tree': self.tree.copy(),
+            'description': description,
+            'equation_info': {
+                'nodes': [0, 1],
+                'distance': distance_01,
+                'equation': f'd({self.labels[0]}, {self.labels[1]}) = {distance_01:.2f}'
+            },
+            'show_tree': True
+        }
         self.steps.append(step1)
         
-        # Paso 2: Spanning tree sin ciclos
-        step2 = self._create_spanning_tree()
-        self.steps.append(step2)
+        # Pasos 2 a n-1: Agregar cada nodo restante (uno a la vez)
+        for node_idx in range(2, self.n):
+            step = self._add_node_to_tree(node_idx, len(self.steps))
+            self.steps.append(step)
         
-        # Paso 3: Identificar arcos de mayor valor
-        step3 = self._identify_max_edges()
-        self.steps.append(step3)
-        
-        # Paso 4: Calcular Cw para cada arco usando Ml
-        step4 = self._calculate_cw()
-        self.steps.append(step4)
-        
-        # Paso 5: Crear matriz con resultados de Cw
-        step5 = self._create_cw_matrix()
-        self.steps.append(step5)
-        
-        # Paso 6: Crear árbol final
-        step6 = self._create_final_tree()
-        self.steps.append(step6)
+        # Paso final: Árbol completo
+        final_step = {
+            'step': len(self.steps),
+            'title': 'Paso Final: Árbol Aditivo Completo',
+            'matrix': self.distance_matrix.copy(),
+            'tree': self.tree.copy(),
+            'description': f'Árbol aditivo completo con {self.n} nodos construido',
+            'is_additive_tree': True
+        }
+        self.steps.append(final_step)
         
         return self.steps
     
-    def _create_initial_graph(self) -> Dict[str, Any]:
-        """Paso 1: Crear grafo inicial desde matriz Mh."""
-        G = nx.Graph()
+    def _add_node_to_tree(self, node_idx: int, step_number: int) -> Dict[str, Any]:
+        """
+        Agrega un nuevo nodo al árbol existente, resolviendo un sistema de ecuaciones
+        para determinar dónde insertarlo y las distancias.
         
-        # Agregar nodos
-        for i in range(self.n):
-            G.add_node(i, label=self.labels[i])
+        Args:
+            node_idx: Índice del nodo a agregar
+            step_number: Número de paso secuencial
+            
+        Returns:
+            Diccionario con información del paso
+        """
+        new_node = node_idx
+        self.tree.add_node(new_node, label=self.labels[new_node], is_leaf=True)
         
-        # Agregar arcos con pesos de Mh
-        for i in range(self.n):
-            for j in range(i + 1, self.n):
-                if self.Mh[i, j] > 0:
-                    G.add_edge(i, j, weight=self.Mh[i, j])
+        # Encontrar el mejor lugar para insertar el nodo
+        best_edge, internal_node, distances = self._find_best_insertion(new_node)
         
-        return {
-            'step': 1,
-            'title': 'Paso 1: Grafo Inicial (Matriz Mh)',
-            'graph': G,
-            'matrix': self.Mh,
-            'description': f'Grafo completo con {G.number_of_nodes()} nodos y {G.number_of_edges()} arcos'
-        }
-    
-    def _create_spanning_tree(self) -> Dict[str, Any]:
-        """Paso 2: Generar spanning tree sin ciclos."""
-        # Crear grafo completo con pesos de Mh
-        G_full = nx.Graph()
-        for i in range(self.n):
-            G_full.add_node(i, label=self.labels[i])
-        for i in range(self.n):
-            for j in range(i + 1, self.n):
-                G_full.add_edge(i, j, weight=self.Mh[i, j])
-        
-        # Usar algoritmo de Kruskal para encontrar spanning tree
-        T = nx.minimum_spanning_tree(G_full, weight='weight', algorithm='kruskal')
-        # Copiar labels a T
-        for node in T.nodes():
-            if node in G_full.nodes() and 'label' in G_full.nodes[node]:
-                T.nodes[node]['label'] = G_full.nodes[node]['label']
-            elif node < len(self.labels):
-                T.nodes[node]['label'] = self.labels[node]
-        
-        return {
-            'step': 2,
-            'title': 'Paso 2: Spanning Tree sin Ciclos',
-            'graph': T,
-            'matrix': self.Mh,
-            'description': f'Árbol de expansión mínima con {T.number_of_edges()} arcos',
-            'edges': list(T.edges(data=True))
-        }
-    
-    def _find_path_edges(self, T, source, target):
-        """Encuentra los arcos en el camino entre source y target en el árbol T."""
-        try:
-            path = nx.shortest_path(T, source, target)
-            edges_in_path = []
-            for i in range(len(path) - 1):
-                edges_in_path.append((path[i], path[i+1]))
-            return edges_in_path
-        except:
-            return []
-    
-    def _get_max_weight_edge(self, T):
-        """Obtiene el arco de mayor peso en el spanning tree."""
-        max_weight = -1
-        max_edge = None
-        for u, v in T.edges():
-            weight = T[u][v].get('weight', self.Mh[u, v])
-            if weight > max_weight:
-                max_weight = weight
-                max_edge = (u, v)
-        return max_edge, max_weight
-    
-    def _identify_max_edges(self) -> Dict[str, Any]:
-        """Paso 3: Crear matriz con arcos de mayor valor para cada par de nodos."""
-        # Obtener spanning tree del paso anterior
-        G_full = nx.Graph()
-        for i in range(self.n):
-            G_full.add_node(i, label=self.labels[i])
-        for i in range(self.n):
-            for j in range(i + 1, self.n):
-                G_full.add_edge(i, j, weight=self.Mh[i, j])
-        
-        T = nx.minimum_spanning_tree(G_full, weight='weight', algorithm='kruskal')
-        # Copiar labels a T
-        for node in T.nodes():
-            if node in G_full.nodes() and 'label' in G_full.nodes[node]:
-                T.nodes[node]['label'] = G_full.nodes[node]['label']
-            elif node < len(self.labels):
-                T.nodes[node]['label'] = self.labels[node]
-        
-        # Encontrar el arco de mayor peso
-        max_edge, max_weight = self._get_max_weight_edge(T)
-        
-        # Crear matriz que muestra qué arco se usa para cada par de nodos
-        # Para cada par (i,j), encontrar el camino en el spanning tree
-        # y determinar qué arco del camino tiene mayor peso
-        path_matrix = np.zeros((self.n, self.n), dtype=object)
-        edge_usage = {}  # Para cada arco, qué pares lo usan
-        
-        for i in range(self.n):
-            for j in range(self.n):
-                if i >= j:
-                    path_matrix[i, j] = '-'
-                else:
-                    # Encontrar camino entre i y j
-                    path_edges = self._find_path_edges(T, i, j)
-                    if path_edges:
-                        # Encontrar el arco de mayor peso en el camino
-                        max_edge_in_path = None
-                        max_w = -1
-                        for edge in path_edges:
-                            u, v = edge
-                            w = self.Mh[u, v]
-                            if w > max_w:
-                                max_w = w
-                                max_edge_in_path = edge
-                        
-                        if max_edge_in_path:
-                            u, v = max_edge_in_path
-                            # Guardar en formato (uv) usando etiquetas
-                            label_u = self.labels[u]
-                            label_v = self.labels[v]
-                            path_matrix[i, j] = f"({label_u}{label_v})"
-                            
-                            # Registrar uso del arco
-                            edge_key = tuple(sorted(max_edge_in_path))
-                            if edge_key not in edge_usage:
-                                edge_usage[edge_key] = []
-                            edge_usage[edge_key].append((i, j))
+        if best_edge is None:
+            # Si no se puede insertar en un arco, conectar directamente a un nodo existente
+            # Esto solo debería pasar si el árbol tiene solo un arco
+            min_dist = np.inf
+            closest_node = 0
+            for existing_node in self.tree.nodes():
+                if existing_node != new_node:
+                    # Calcular distancia (existing_node puede ser interno)
+                    if existing_node < self.n:
+                        dist = self.distance_matrix[new_node, existing_node]
                     else:
-                        path_matrix[i, j] = '-'
-        
-        # Ordenar arcos por peso (mayor a menor)
-        edges_with_weights = [(u, v, self.Mh[u, v]) for u, v in T.edges()]
-        edges_with_weights.sort(key=lambda x: x[2], reverse=True)
-        
-        description = f"Arco de mayor peso: {self.labels[max_edge[0]]}{self.labels[max_edge[1]]} (peso: {max_weight:.2f})\n"
-        description += f"Matriz muestra el arco de mayor peso usado en el camino entre cada par de nodos."
-        self.cw=path_matrix
-        return {
-            'step': 3,
-            'title': 'Paso 3: Matriz con Arcos de Mayor Valor',
-            'graph': None,  # No mostrar grafo, solo la matriz
-            'matrix': path_matrix,
-            'path_matrix': path_matrix,  # Matriz con los arcos
-            'description': description,
-            'max_edge': max_edge,
-            'max_weight': max_weight,
-            'edges_ordered': edges_with_weights,
-            'edge_usage': edge_usage
-        }
-    
-    def _calculate_cw(self) -> Dict[str, Any]:
-        """Paso 4: Calcular Cw para cada arco usando el máximo de distancias de pares que lo usan."""
-        # Obtener la matriz de arcos del paso 3
-        if not hasattr(self, 'cw') or self.cw is None:
-            # Si no hay matriz del paso 3, retornar vacío
+                        dist = self._get_distance_to_leaf(existing_node, new_node)
+                    if dist < min_dist:
+                        min_dist = dist
+                        closest_node = existing_node
+            
+            self.tree.add_edge(new_node, closest_node, distance=min_dist)
+            
+            # Crear ecuación simple para mostrar
+            equations = [
+                f"d({self.labels[new_node]}, {self.labels[closest_node]}) = {min_dist:.2f}",
+                f"",
+                f"Como el árbol solo tiene un arco, se conecta directamente."
+            ]
+            
+            label_new = self._get_node_label(new_node)
+            label_closest = self._get_node_label(closest_node)
+            
+            description = f"Paso {step_number}: Agregar nodo {label_new}\n\n"
+            description += f"Como el árbol solo tiene un arco, se conecta directamente:\n"
+            description += f"- {label_new} ↔ {label_closest}\n"
+            description += f"- Distancia: {min_dist:.2f}"
+            
             return {
-                'step': 4,
-                'title': 'Paso 4: Cálculo de Cw para cada Arco',
-                'graph': None,
-                'matrix': None,
-                'calculation_texts': [],
-                'description': 'Error: No se encontró la matriz del paso 3',
-                'cw_values': {},
-                'edges_info': [],
-                'edge_pairs': {}
+                'step': step_number,
+                'title': f'Paso {step_number}: Agregar {label_new}',
+                'matrix': self.distance_matrix.copy(),
+                'tree': self.tree.copy(),
+                'description': description,
+                'equation_info': {
+                    'nodes': [new_node, closest_node],
+                    'distance': min_dist,
+                    'equation': f'd({label_new}, {label_closest}) = {min_dist:.2f}',
+                    'equations': equations
+                },
+                'show_tree': True
             }
         
-        path_matrix = self.cw
+        # Insertar nodo interno en el arco
+        u, v = best_edge
+        self.tree.remove_edge(u, v)
         
-        # Obtener spanning tree
-        G_full = nx.Graph()
-        for i in range(self.n):
-            G_full.add_node(i, label=self.labels[i])
-        for i in range(self.n):
-            for j in range(i + 1, self.n):
-                G_full.add_edge(i, j, weight=self.Mh[i, j])
+        # Obtener distancias calculadas
+        dist_u_to_internal = distances[0]
+        dist_v_to_internal = distances[1]
+        dist_new_to_internal = distances[2]
         
-        T = nx.minimum_spanning_tree(G_full, weight='weight', algorithm='kruskal')
-        # Copiar labels a T
-        for node in T.nodes():
-            if node in G_full.nodes() and 'label' in G_full.nodes[node]:
-                T.nodes[node]['label'] = G_full.nodes[node]['label']
-            elif node < len(self.labels):
-                T.nodes[node]['label'] = self.labels[node]
+        # Tolerancia para considerar distancia como cero
+        tolerance = 1e-6
         
-        # Extraer los arcos únicos que aparecen en la matriz del paso 3
-        unique_edges = set()
-        for i in range(self.n):
-            for j in range(i + 1, self.n):
-                cell_value = path_matrix[i, j]
-                if cell_value != '-' and isinstance(cell_value, str):
-                    # Extraer el arco del formato (AB)
-                    edge_str = cell_value.strip('()')
-                    if edge_str:
-                        # Encontrar los índices de los nodos
-                        # El formato es (labelU labelV)
-                        for u in range(self.n):
-                            for v in range(u + 1, self.n):
-                                label_u = self.labels[u]
-                                label_v = self.labels[v]
-                                if edge_str == f"{label_u}{label_v}" or edge_str == f"{label_v}{label_u}":
-                                    unique_edges.add(tuple(sorted([u, v])))
-        
-        # Calcular Cw solo para los arcos únicos
-        cw_values = {}
-        edges_info = []
-        edge_pairs = {}
-        
-        for edge_key in unique_edges:
-            u, v = edge_key
-            
-            # Encontrar todos los pares de nodos cuyo camino pasa por este arco
-            # según la matriz del paso 3
-            pairs_using_edge = []
-            distances_list = []
-            
-            # Buscar en la matriz del paso 3 qué pares usan este arco
-            label_u = self.labels[u]
-            label_v = self.labels[v]
-            edge_label = f"{label_u}{label_v}"
-            
-            for i in range(self.n):
-                for j in range(i + 1, self.n):
-                    cell_value = path_matrix[i, j]
-                    if cell_value == f"({edge_label})" or cell_value == f"({label_v}{label_u})":
-                        pairs_using_edge.append((i, j))
-                        dist = self.Ml[i, j]
-                        distances_list.append(dist)
-            
-            # Encontrar el valor MÁXIMO de las distancias (no la suma)
-            max_dist = max(distances_list) if distances_list else 0.0
-            
-            cw_values[edge_key] = max_dist
-            edge_pairs[edge_key] = pairs_using_edge
-            
-            # Formatear pares y distancias
-            pairs_labels = [f"{self.labels[p[0]]}{self.labels[p[1]]}" for p in pairs_using_edge]
-            pairs_str = '; '.join(pairs_labels)
-            distances_str = '{' + ', '.join([f"{d:.2f}" for d in distances_list]) + '}'
-            
-            edges_info.append({
-                'edge': (u, v),
-                'edge_label': edge_label,
-                'weight_Mh': self.Mh[u, v],
-                'Cw': max_dist,
-                'pairs_count': len(pairs_using_edge),
-                'pairs': pairs_using_edge,
-                'pairs_labels': pairs_labels,
-                'distances': distances_list,
-                'pairs_str': pairs_str,
-                'distances_str': distances_str,
-                'max_distance': max_dist
-            })
-        
-        # Crear información de cálculo para renderizado como texto
-        calculation_texts = []
-        
-        for info in edges_info:
-            # Formato: CW[AB] = {AC; AE; BC; BD; BE} = {4.000, 5.000, 3.000, 4.000, 5.000, 4.000} → Max: 5.000
-            calc_text = f"CW[{info['edge_label']}] = "
-            calc_text += '{' + info['pairs_str'] + '} = '
-            calc_text += info['distances_str']
-            calc_text += f" → Max: {info['max_distance']:.2f}"
-            calculation_texts.append(calc_text)
-        
-        # Crear descripción detallada
-        description = f"Cálculo de Cw para {len(edges_info)} arcos únicos del paso 3:\n\n"
-        for info in edges_info:
-            description += f"CW[{info['edge_label']}] = "
-            description += '{' + info['pairs_str'] + '} = '
-            description += info['distances_str']
-            description += f" → Max: {info['max_distance']:.2f}\n"
-        
-        return {
-            'step': 4,
-            'title': 'Paso 4: Cálculo de Cw para cada Arco',
-            'graph': None,  # No mostrar grafo, solo el cálculo
-            'matrix': None,  # No usar matriz
-            'calculation_texts': calculation_texts,  # Textos formateados para renderizar
-            'description': description,
-            'cw_values': cw_values,
-            'edges_info': edges_info,
-            'edge_pairs': edge_pairs
-        }
-    
-    def _create_cw_matrix(self) -> Dict[str, Any]:
-        """Paso 5: Crear matriz con resultados de Cw mostrando los valores numéricos máximos."""
-        # Obtener la matriz de arcos del paso 3 y los valores Cw del paso 4
-        if not hasattr(self, 'cw') or self.cw is None:
-            # Si no hay matriz del paso 3, retornar matriz vacía
-            return {
-                'step': 5,
-                'title': 'Paso 5: Matriz con Resultados de Cw',
-                'graph': None,
-                'matrix': np.zeros((self.n, self.n)),
-                'description': 'Error: No se encontró la matriz del paso 3',
-                'cw_matrix': np.zeros((self.n, self.n)),
-                'cw_values': {}
-            }
-        
-        path_matrix = self.cw
-        
-        # Obtener los valores Cw calculados en el paso 4
-        # Necesitamos recalcular o usar los valores del paso anterior
-        # Extraer los arcos únicos y sus valores Cw
-        unique_edges_cw = {}
-        
-        # Extraer los arcos únicos que aparecen en la matriz del paso 3
-        for i in range(self.n):
-            for j in range(i + 1, self.n):
-                cell_value = path_matrix[i, j]
-                if cell_value != '-' and isinstance(cell_value, str):
-                    edge_str = cell_value.strip('()')
-                    if edge_str:
-                        # Encontrar los índices de los nodos
-                        for u in range(self.n):
-                            for v in range(u + 1, self.n):
-                                label_u = self.labels[u]
-                                label_v = self.labels[v]
-                                if edge_str == f"{label_u}{label_v}" or edge_str == f"{label_v}{label_u}":
-                                    edge_key = tuple(sorted([u, v]))
-                                    if edge_key not in unique_edges_cw:
-                                        # Calcular Cw para este arco
-                                        distances_list = []
-                                        
-                                        # Buscar qué pares usan este arco
-                                        for ii in range(self.n):
-                                            for jj in range(ii + 1, self.n):
-                                                cell_val = path_matrix[ii, jj]
-                                                if cell_val == f"({label_u}{label_v})" or cell_val == f"({label_v}{label_u})":
-                                                    dist = self.Ml[ii, jj]
-                                                    distances_list.append(dist)
-                                        
-                                        max_dist = max(distances_list) if distances_list else 0.0
-                                        unique_edges_cw[edge_key] = max_dist
-        
-        # Crear matriz resultado con los valores numéricos de Cw
-        cw_result_matrix = np.zeros((self.n, self.n), dtype=object)
-        
-        for i in range(self.n):
-            for j in range(self.n):
-                if i >= j:
-                    cw_result_matrix[i, j] = '-'
-                else:
-                    # Obtener el arco que se usa para este par
-                    cell_value = path_matrix[i, j]
-                    if cell_value != '-' and isinstance(cell_value, str):
-                        edge_str = cell_value.strip('()')
-                        if edge_str:
-                            # Buscar el valor Cw de este arco
-                            for edge_key, cw_value in unique_edges_cw.items():
-                                u, v = edge_key
-                                label_u = self.labels[u]
-                                label_v = self.labels[v]
-                                if edge_str == f"{label_u}{label_v}" or edge_str == f"{label_v}{label_u}":
-                                    # Mostrar el valor numérico de Cw
-                                    cw_result_matrix[i, j] = cw_value
-                                    break
-                            else:
-                                cw_result_matrix[i, j] = '-'
-                        else:
-                            cw_result_matrix[i, j] = '-'
-                    else:
-                        cw_result_matrix[i, j] = '-'
-        
-        # Crear descripción con los valores Cw
-        description = "Matriz con valores Cw (máximos) para cada par de nodos:\n\n"
-        description += "Valores Cw calculados por arco:\n"
-        for edge_key, cw_value in sorted(unique_edges_cw.items(), key=lambda x: x[1], reverse=True):
-            u, v = edge_key
-            label_u = self.labels[u]
-            label_v = self.labels[v]
-            description += f"  ({label_u}{label_v}): Cw = {cw_value:.2f}\n"
-        
-        return {
-            'step': 5,
-            'title': 'Paso 5: Matriz con Resultados de Cw',
-            'graph': None,
-            'matrix': cw_result_matrix,
-            'description': description,
-            'cw_matrix': cw_result_matrix,
-            'cw_values': unique_edges_cw,
-            'cw_result_matrix': cw_result_matrix  # Matriz con valores numéricos
-        }
-    
-    def _create_final_tree(self) -> Dict[str, Any]:
-        """Paso 6: Crear árbol final usando valores máximos de Cw del paso 5."""
-        # Obtener spanning tree
-        G_full = nx.Graph()
-        for i in range(self.n):
-            G_full.add_node(i, label=self.labels[i])
-        for i in range(self.n):
-            for j in range(i + 1, self.n):
-                G_full.add_edge(i, j, weight=self.Mh[i, j])
-
-        T = nx.minimum_spanning_tree(G_full, weight='weight', algorithm='kruskal')
-        # Copiar labels a T
-        for node in T.nodes():
-            if node in G_full.nodes() and 'label' in G_full.nodes[node]:
-                T.nodes[node]['label'] = G_full.nodes[node]['label']
-            elif node < len(self.labels):
-                T.nodes[node]['label'] = self.labels[node]
-        
-        # Obtener valores Cw MÁXIMOS del paso 5 (no suma)
-        if not hasattr(self, 'cw') or self.cw is None:
-            return {
-                'step': 6,
-                'title': 'Paso 6: Árbol Aditivo Final',
-                'graph': T,
-                'tree': T,
-                'matrix': None,
-                'description': 'Error: No se encontró información del paso 3',
-                'cw_values': {},
-                'max_cw_edge': None,
-                'max_cw_value': 0,
-                'edge_distances': {}
-            }
-        
-        path_matrix = self.cw
-        
-        # Calcular valores Cw MÁXIMOS para cada arco (igual que en paso 4 y 5)
-        cw_values = {}
-        unique_edges_cw = {}
-        
-        # Extraer los arcos únicos que aparecen en la matriz del paso 3
-        for i in range(self.n):
-            for j in range(i + 1, self.n):
-                cell_value = path_matrix[i, j]
-                if cell_value != '-' and isinstance(cell_value, str):
-                    edge_str = cell_value.strip('()')
-                    if edge_str:
-                        # Encontrar los índices de los nodos
-                        for u in range(self.n):
-                            for v in range(u + 1, self.n):
-                                label_u = self.labels[u]
-                                label_v = self.labels[v]
-                                if edge_str == f"{label_u}{label_v}" or edge_str == f"{label_v}{label_u}":
-                                    edge_key = tuple(sorted([u, v]))
-                                    if edge_key not in unique_edges_cw:
-                                        # Calcular Cw MÁXIMO para este arco
-                                        distances_list = []
-                                        
-                                        # Buscar qué pares usan este arco
-                                        for ii in range(self.n):
-                                            for jj in range(ii + 1, self.n):
-                                                cell_val = path_matrix[ii, jj]
-                                                if cell_val == f"({label_u}{label_v})" or cell_val == f"({label_v}{label_u})":
-                                                    dist = self.Ml[ii, jj]
-                                                    distances_list.append(dist)
-                                        
-                                        max_dist = max(distances_list) if distances_list else 0.0
-                                        unique_edges_cw[edge_key] = max_dist
-        
-        cw_values = unique_edges_cw
-        
-        # Encontrar el arco con mayor Cw (valor máximo)
-        if cw_values:
-            max_cw_edge = max(cw_values.items(), key=lambda x: x[1])
-            max_cw_value = max_cw_edge[1]
-            max_edge = max_cw_edge[0]
-        else:
-            max_edge = None
-            max_cw_value = 0
-        
-        # Distribuir valores: usar los valores máximos de Cw
-        edge_distances = {}
-        distribution_info = []
-        
-        for edge_key, cw_max in cw_values.items():
-            u, v = edge_key
-            
-            # Usar el valor máximo de Cw directamente, dividido por 2 para cada lado
-            dist_u = cw_max / 2.0
-            dist_v = cw_max / 2.0
-            edge_distances[edge_key] = (dist_u, dist_v)
-            
-            label_u = self.labels[u]
-            label_v = self.labels[v]
-            
-            if edge_key == max_edge:
-                distribution_info.append(
-                    f"Arco {label_u}{label_v}: Cw={cw_max:.2f} (máximo) → "
-                    f"Distancia por lado: {dist_u:.2f}"
-                )
+        # Si alguna distancia es 0, fusionar nodos en lugar de crear uno nuevo
+        if abs(dist_u_to_internal) < tolerance:
+            # El nodo interno coincide con u, conectar directamente
+            self.tree.add_edge(u, v, distance=dist_v_to_internal)
+            self.tree.add_edge(u, new_node, distance=dist_new_to_internal)
+            internal_node_id = u  # Usar u como nodo interno
+        elif abs(dist_v_to_internal) < tolerance:
+            # El nodo interno coincide con v, conectar directamente
+            self.tree.add_edge(u, v, distance=dist_u_to_internal)
+            self.tree.add_edge(v, new_node, distance=dist_new_to_internal)
+            internal_node_id = v  # Usar v como nodo interno
+        elif abs(dist_new_to_internal) < tolerance:
+            # El nuevo nodo coincide con el nodo interno, conectar directamente a u o v
+            # Usar el nodo más cercano
+            if dist_u_to_internal < dist_v_to_internal:
+                self.tree.add_edge(u, v, distance=dist_u_to_internal + dist_v_to_internal)
+                self.tree.add_edge(u, new_node, distance=0.0)
+                internal_node_id = u
             else:
-                distribution_info.append(
-                    f"Arco {label_u}{label_v}: Cw={cw_max:.2f} → "
-                    f"Distancia por lado: {dist_u:.2f}"
-                )
+                self.tree.add_edge(u, v, distance=dist_u_to_internal + dist_v_to_internal)
+                self.tree.add_edge(v, new_node, distance=0.0)
+                internal_node_id = v
+        else:
+            # Crear nodo interno solo si todas las distancias son significativas
+            internal_node_id = self.node_counter
+            self.node_counter += 1
+            self.tree.add_node(internal_node_id, label=f'U{internal_node_id}', is_leaf=False)
             
-            # Asignar distancia al arco en el grafo
-            if T.has_edge(u, v):
-                T[u][v]['distance'] = dist_u  # Usar dist_u como la distancia del arco
-                T[u][v]['weight'] = self.Mh[u, v]
-                T[u][v]['cw'] = cw_max
+            # Conectar nodos
+            self.tree.add_edge(u, internal_node_id, distance=dist_u_to_internal)
+            self.tree.add_edge(v, internal_node_id, distance=dist_v_to_internal)
+            self.tree.add_edge(new_node, internal_node_id, distance=dist_new_to_internal)
         
-        description = "Árbol Aditivo Final\n\n"
-        if max_edge:
-            description += f"Arco con mayor Cw: {self.labels[max_edge[0]]}{self.labels[max_edge[1]]} "
-            description += f"(Cw = {max_cw_value:.2f})\n"
-            description += f"Distancia por lado: {max_cw_value/2.0:.2f}\n\n"
-        description += "Distribución de valores (usando máximos de Cw):\n"
-        for info in distribution_info:
-            description += f"  {info}\n"
+        # Crear información de ecuaciones
+        equations = self._format_equations(u, v, new_node, internal_node_id, distances)
+        
+        # Obtener labels de manera segura
+        label_new = self._get_node_label(new_node)
+        label_u = self._get_node_label(u)
+        label_v = self._get_node_label(v)
+        
+        # Crear descripción detallada de la unión
+        description = f"Paso {step_number}: Agregar nodo {label_new}\n\n"
+        description += f"1. Se identifica el arco ({label_u}, {label_v}) como el mejor lugar para insertar {label_new}\n"
+        
+        # Determinar si se creó un nodo interno nuevo o se usó uno existente
+        tolerance = 1e-6
+        if abs(dist_u_to_internal) < tolerance:
+            internal_label = label_u
+            description += f"2. El nodo interno coincide con {label_u} (distancia ≈ 0)\n"
+            description += f"3. Se resuelve el sistema de ecuaciones:\n"
+            description += f"   - {label_u} ↔ {label_v}: {dist_v_to_internal:.2f}\n"
+            description += f"   - {label_u} ↔ {label_new}: {dist_new_to_internal:.2f}\n"
+            description += f"4. Se conectan: {label_u} ↔ {label_v} y {label_u} ↔ {label_new}"
+        elif abs(dist_v_to_internal) < tolerance:
+            internal_label = label_v
+            description += f"2. El nodo interno coincide con {label_v} (distancia ≈ 0)\n"
+            description += f"3. Se resuelve el sistema de ecuaciones:\n"
+            description += f"   - {label_u} ↔ {label_v}: {dist_u_to_internal:.2f}\n"
+            description += f"   - {label_v} ↔ {label_new}: {dist_new_to_internal:.2f}\n"
+            description += f"4. Se conectan: {label_u} ↔ {label_v} y {label_v} ↔ {label_new}"
+        elif abs(dist_new_to_internal) < tolerance:
+            internal_label = label_u if dist_u_to_internal < dist_v_to_internal else label_v
+            description += f"2. El nuevo nodo se conecta directamente (distancia ≈ 0)\n"
+            description += f"3. Se resuelve el sistema de ecuaciones:\n"
+            description += f"   - {label_u} ↔ {label_v}: {dist_u_to_internal + dist_v_to_internal:.2f}\n"
+            description += f"   - {internal_label} ↔ {label_new}: 0.00\n"
+            description += f"4. Se conectan: {label_u} ↔ {label_v} y {internal_label} ↔ {label_new}"
+        else:
+            internal_label = f'U{internal_node_id}'
+            description += f"2. Se crea un nodo interno {internal_label} en este arco\n"
+            description += f"3. Se resuelve el sistema de ecuaciones para calcular las distancias:\n"
+            description += f"   - Distancia de {label_u} a {internal_label}: {dist_u_to_internal:.2f}\n"
+            description += f"   - Distancia de {label_v} a {internal_label}: {dist_v_to_internal:.2f}\n"
+            description += f"   - Distancia de {label_new} a {internal_label}: {dist_new_to_internal:.2f}\n"
+            description += f"4. Se conectan los nodos: {label_u} ↔ {internal_label} ↔ {label_v} y {label_new} ↔ {internal_label}"
+        
+        # Determinar el label del nodo interno para el título
+        tolerance = 1e-6
+        if abs(dist_u_to_internal) < tolerance or (abs(dist_new_to_internal) < tolerance and dist_u_to_internal < dist_v_to_internal):
+            internal_label_title = label_u
+        elif abs(dist_v_to_internal) < tolerance or (abs(dist_new_to_internal) < tolerance):
+            internal_label_title = label_v
+        else:
+            internal_label_title = f'U{internal_node_id}'
         
         return {
-            'step': 6,
-            'title': 'Paso 6: Árbol Aditivo Final',
-            'graph': T,
-            'tree': T,
-            'matrix': None,
+            'step': step_number,
+            'title': f'Paso {step_number}: Agregar {label_new} - Unión en {internal_label_title}',
+            'matrix': self.distance_matrix.copy(),
+            'tree': self.tree.copy(),
             'description': description,
-            'cw_values': cw_values,
-            'max_cw_edge': max_edge,
-            'max_cw_value': max_cw_value,
-            'edge_distances': edge_distances,
-            'is_additive_tree': True  # Indicador para usar visualización especial
+            'equation_info': {
+                'nodes': [u, v, new_node, internal_node_id],
+                'distances': distances,
+                'equations': equations,
+                'system_solved': True,
+                'union_info': {
+                    'new_node': label_new,
+                    'edge': (label_u, label_v),
+                    'internal_node': internal_label_title,
+                    'distances': {
+                        f'{label_u}-{internal_label_title}': dist_u_to_internal,
+                        f'{label_v}-{internal_label_title}': dist_v_to_internal,
+                        f'{label_new}-{internal_label_title}': dist_new_to_internal
+                    }
+                }
+            },
+            'internal_node': internal_node_id,
+            'show_tree': True  # Forzar mostrar el árbol
         }
+    
+    def _get_tree_distance(self, u: int, v: int) -> float:
+        """
+        Calcula la distancia entre dos nodos en el árbol actual,
+        sumando las distancias de las aristas a lo largo del camino.
+        
+        Args:
+            u: Primer nodo
+            v: Segundo nodo
+            
+        Returns:
+            Distancia total en el árbol, o distancia de la matriz si no hay camino
+        """
+        if u == v:
+            return 0.0
+        
+        # Si ambos nodos están en el árbol, calcular distancia en el árbol
+        if u in self.tree.nodes() and v in self.tree.nodes():
+            try:
+                path = nx.shortest_path(self.tree, u, v)
+                total_distance = 0.0
+                for i in range(len(path) - 1):
+                    edge_data = self.tree[path[i]][path[i+1]]
+                    if 'distance' in edge_data:
+                        total_distance += edge_data['distance']
+                    elif 'weight' in edge_data:
+                        total_distance += edge_data['weight']
+                return total_distance
+            except nx.NetworkXNoPath:
+                pass
+        
+        # Si alguno no está en el árbol o son nodos hoja, usar distancia de la matriz
+        if u < self.n and v < self.n:
+            return self.distance_matrix[u, v]
+        
+        # Si uno es interno y otro es hoja, calcular desde el árbol
+        # Esto no debería pasar normalmente, pero por seguridad
+        return 0.0
+    
+    def _get_distance_to_leaf(self, node: int, leaf: int) -> float:
+        """
+        Calcula la distancia desde un nodo (puede ser interno) hasta un nodo hoja.
+        
+        Args:
+            node: Nodo origen (puede ser interno o hoja)
+            leaf: Nodo hoja destino (índice < n)
+            
+        Returns:
+            Distancia desde node hasta leaf
+        """
+        if node == leaf:
+            return 0.0
+        
+        # Si node es un nodo hoja, usar la matriz directamente
+        if node < self.n:
+            return self.distance_matrix[node, leaf]
+        
+        # Si node es un nodo interno, calcular distancia en el árbol
+        if node in self.tree.nodes():
+            try:
+                path = nx.shortest_path(self.tree, node, leaf)
+                total_distance = 0.0
+                for i in range(len(path) - 1):
+                    edge_data = self.tree[path[i]][path[i+1]]
+                    if 'distance' in edge_data:
+                        total_distance += edge_data['distance']
+                    elif 'weight' in edge_data:
+                        total_distance += edge_data['weight']
+                return total_distance
+            except nx.NetworkXNoPath:
+                pass
+        
+        # Fallback: retornar 0 si no se puede calcular
+        return 0.0
+    
+    def _find_best_insertion(self, new_node: int) -> Tuple[Optional[Tuple[int, int]], Optional[int], Optional[List[float]]]:
+        """
+        Encuentra el mejor arco donde insertar el nuevo nodo.
+        Resuelve un sistema de ecuaciones para cada arco posible.
+        
+        Args:
+            new_node: Índice del nodo a insertar
+            
+        Returns:
+            Tupla con (mejor_arco, nodo_interno, distancias) o (None, None, None) si no se puede insertar
+        """
+        best_edge = None
+        best_internal = None
+        best_distances = None
+        best_error = np.inf
+        
+        # Probar insertar en cada arco del árbol
+        for edge in self.tree.edges():
+            u, v = edge
+            distances, error = self._solve_equations_for_edge(new_node, u, v)
+            
+            if distances is not None:
+                # Verificar que las distancias sean no negativas (con tolerancia)
+                tolerance = 1e-6
+                if all(d >= -tolerance for d in distances):
+                    # Preferir soluciones con menor error
+                    if error < best_error:
+                        best_error = error
+                        best_edge = (u, v)
+                        best_distances = distances
+        
+        # Si no encontramos ninguna solución válida, usar el primer arco disponible
+        # y forzar una solución (esto no debería pasar normalmente)
+        if best_edge is None and len(list(self.tree.edges())) > 0:
+            # Tomar el primer arco y crear una solución aproximada
+            first_edge = list(self.tree.edges())[0]
+            u, v = first_edge
+            d_u_new = self._get_distance_to_leaf(u, new_node)
+            d_v_new = self._get_distance_to_leaf(v, new_node)
+            d_u_v = self._get_tree_distance(u, v)
+            
+            # Calcular solución
+            z = max(0, (d_u_new + d_v_new - d_u_v) / 2.0)
+            x = max(0, d_u_new - z)
+            y = max(0, d_v_new - z)
+            
+            # Ajustar si x + y no coincide con d_u_v
+            if abs((x + y) - d_u_v) > 1e-6:
+                # Redistribuir proporcionalmente
+                if (x + y) > 0:
+                    factor = d_u_v / (x + y)
+                    x = x * factor
+                    y = y * factor
+                else:
+                    x = d_u_v / 2.0
+                    y = d_u_v / 2.0
+            
+            best_edge = (u, v)
+            best_distances = [x, y, z]
+        
+        if best_edge is None:
+            return None, None, None
+        
+        # Crear nodo interno temporal para el cálculo
+        internal_node = self.node_counter
+        
+        return best_edge, internal_node, best_distances
+    
+    def _solve_equations_for_edge(self, new_node: int, u: int, v: int) -> Tuple[Optional[List[float]], float]:
+        """
+        Resuelve el sistema de ecuaciones para insertar new_node en el arco (u, v).
+        
+        Sistema de ecuaciones:
+        d(u, new) = d(u, internal) + d(internal, new)
+        d(v, new) = d(v, internal) + d(internal, new)
+        d(u, v) = d(u, internal) + d(v, internal)
+        
+        Donde:
+        - d(u, internal) = x
+        - d(v, internal) = y
+        - d(internal, new) = z
+        
+        Entonces:
+        x + z = d(u, new)
+        y + z = d(v, new)
+        x + y = d(u, v)
+        
+        Resolviendo:
+        z = (d(u, new) + d(v, new) - d(u, v)) / 2
+        x = d(u, new) - z
+        y = d(v, new) - z
+        
+        Args:
+            new_node: Nodo a insertar
+            u: Primer nodo del arco
+            v: Segundo nodo del arco
+            
+        Returns:
+            Tupla con (distancias [x, y, z], error) o (None, error) si no hay solución válida
+        """
+        # Calcular distancias desde u y v hasta new_node
+        # u y v pueden ser nodos hoja o internos, pero new_node siempre es hoja
+        d_u_new = self._get_distance_to_leaf(u, new_node)
+        d_v_new = self._get_distance_to_leaf(v, new_node)
+        
+        # IMPORTANTE: Usar la distancia en el árbol actual entre u y v
+        # (suma de aristas a lo largo del camino), no la distancia de la matriz
+        d_u_v = self._get_tree_distance(u, v)
+        
+        # Calcular z (distancia del nodo interno al nuevo nodo)
+        z = (d_u_new + d_v_new - d_u_v) / 2.0
+        
+        # Calcular x (distancia de u al nodo interno)
+        x = d_u_new - z
+        
+        # Calcular y (distancia de v al nodo interno)
+        y = d_v_new - z
+        
+        # Verificar que todas las distancias sean positivas (con tolerancia pequeña)
+        tolerance = 1e-6
+        if x < -tolerance or y < -tolerance or z < -tolerance:
+            # Calcular error de validación
+            error = abs(min(0, x)) + abs(min(0, y)) + abs(min(0, z))
+            return None, error
+        
+        # Asegurar que las distancias no sean negativas (ajustar a 0 si son muy pequeñas)
+        x = max(0, x)
+        y = max(0, y)
+        z = max(0, z)
+        
+        # Calcular error de validación (verificar que se cumplan las ecuaciones)
+        error1 = abs((x + z) - d_u_new)
+        error2 = abs((y + z) - d_v_new)
+        error3 = abs((x + y) - d_u_v)
+        total_error = error1 + error2 + error3
+        
+        return [x, y, z], total_error
+    
+    def _get_node_label(self, node: int) -> str:
+        """
+        Obtiene la etiqueta de un nodo, manejando nodos hoja e internos.
+        
+        Args:
+            node: Índice del nodo
+            
+        Returns:
+            Etiqueta del nodo
+        """
+        # Si es un nodo hoja, usar la lista de labels
+        if node < self.n:
+            return self.labels[node]
+        
+        # Si es un nodo interno, obtener el label del árbol
+        if node in self.tree.nodes():
+            return self.tree.nodes[node].get('label', f'U{node}')
+        
+        # Fallback
+        return f'U{node}'
+    
+    def _format_equations(self, u: int, v: int, new_node: int, internal_node: int, distances: List[float]) -> List[str]:
+        """
+        Formatea las ecuaciones del sistema resuelto.
+        
+        Args:
+            u, v: Nodos del arco original
+            new_node: Nuevo nodo insertado
+            internal_node: Nodo interno creado
+            distances: [dist_u_internal, dist_v_internal, dist_new_internal]
+            
+        Returns:
+            Lista de strings con las ecuaciones formateadas
+        """
+        x, y, z = distances
+        # Calcular distancias (u y v pueden ser internos)
+        d_u_new = self._get_distance_to_leaf(u, new_node)
+        d_v_new = self._get_distance_to_leaf(v, new_node)
+        # Usar la distancia en el árbol, no la de la matriz
+        d_u_v = self._get_tree_distance(u, v)
+        
+        # Obtener labels de manera segura
+        label_u = self._get_node_label(u)
+        label_v = self._get_node_label(v)
+        label_new = self._get_node_label(new_node)
+        label_internal = f'U{internal_node}'
+        
+        equations = [
+            f"d({label_u}, {label_new}) = d({label_u}, {label_internal}) + d({label_internal}, {label_new})",
+            f"  → {d_u_new:.2f} = {x:.2f} + {z:.2f}",
+            f"",
+            f"d({label_v}, {label_new}) = d({label_v}, {label_internal}) + d({label_internal}, {label_new})",
+            f"  → {d_v_new:.2f} = {y:.2f} + {z:.2f}",
+            f"",
+            f"d({label_u}, {label_v}) = d({label_u}, {label_internal}) + d({label_v}, {label_internal})",
+            f"  → {d_u_v:.2f} = {x:.2f} + {y:.2f}",
+            f"",
+            f"Solución:",
+            f"  d({label_u}, {label_internal}) = {x:.2f}",
+            f"  d({label_v}, {label_internal}) = {y:.2f}",
+            f"  d({label_internal}, {label_new}) = {z:.2f}"
+        ]
+        
+        return equations
     
     def get_step(self, step_index: int) -> Dict[str, Any]:
         """Obtiene un paso específico."""

@@ -1,44 +1,45 @@
-# Aplicación de Árboles Filogenéticos
+# Aplicación de Árboles Filogenéticos - Proyecto Pepito
 
-Aplicación Python con interfaz gráfica (Tkinter) para visualizar la construcción paso a paso de árboles filogenéticos usando algoritmos de árbol aditivo y árbol ultramétrico (Neighbor-Joining).
+Aplicación Python con interfaz gráfica (Tkinter) para visualizar la construcción paso a paso de árboles filogenéticos usando dos algoritmos.
 
-## Características
+## Estructura del Proyecto
 
-- **Árbol Aditivo**: Implementación paso a paso del algoritmo de árbol aditivo
-  - Grafo inicial desde matriz Mh (pesos)
-  - Spanning tree sin ciclos
-  - Identificación de arcos de mayor valor
-  - Cálculo de Cw usando matriz Ml (distancias)
-  - Construcción de matriz Cw
-  - Árbol final
+### Módulos
 
-- **Árbol Ultramétrico (Neighbor-Joining)**: Implementación paso a paso del algoritmo NJ
-  - Visualización de cada iteración
-  - Cálculo de matriz Q
-  - Identificación de pares cercanos
-  - Construcción progresiva del árbol
+1. **`ultrametric_tree.py`** - Árbol Ultramétrico
+   - **Entrada**: 2 matrices (Mh: pesos, Ml: distancias)
+   - **Algoritmo**: Spanning tree, cálculo de Cw, construcción del árbol
+   - **Clase**: `UltrametricTreeBuilder`
 
-- **Visualización Interactiva**:
-  - Navegación paso a paso (anterior/siguiente)
-  - Reproducción automática
-  - Pausa y reanudación
-  - Visualización de grafos y matrices
+2. **`additive_tree.py`** - Árbol Aditivo
+   - **Entrada**: 1 matriz de distancias
+   - **Algoritmo**: Construcción nodo por nodo resolviendo sistemas de ecuaciones
+   - **Clase**: `AdditiveTreeBuilder`
 
-- **Entrada de Datos**:
-  - Carga desde archivos CSV/TXT
-  - Entrada manual de matrices
+### Archivos de Soporte
+
+- `main.py` - Aplicación principal con interfaz Tkinter
+- `matrix_utils.py` - Utilidades para carga y validación de matrices
+- `visualization.py` - Funciones de visualización con matplotlib
+- `matrix_examples.py` - Ejemplos predefinidos
+- `requirements.txt` - Dependencias del proyecto
 
 ## Requisitos
 
 - Python 3.8 o superior
-- Dependencias (ver `requirements.txt`):
+- Dependencias:
   - numpy
   - matplotlib
   - networkx
 
 ## Instalación
 
-1. Clonar o descargar el repositorio
+1. Crear entorno virtual:
+```bash
+python3 -m venv venv
+source venv/bin/activate  # En Linux/Mac
+```
+
 2. Instalar dependencias:
 ```bash
 pip install -r requirements.txt
@@ -48,71 +49,43 @@ pip install -r requirements.txt
 
 Ejecutar la aplicación:
 ```bash
+source activar_entorno.sh
 python main.py
 ```
 
-### Árbol Aditivo
+### Árbol Ultramétrico
 
-1. Seleccionar "Árbol Aditivo"
+1. Seleccionar "Árbol Ultramétrico (Mh, Ml)"
 2. Cargar dos matrices:
    - **Mh**: Matriz de pesos (pesos de los arcos)
    - **Ml**: Matriz de distancias (distancias entre nodos)
 3. Hacer clic en "Ejecutar Algoritmo"
 4. Navegar por los pasos usando los controles
 
-### Árbol Ultramétrico (Neighbor-Joining)
+### Árbol Aditivo
 
-1. Seleccionar "Árbol Ultramétrico (NJ)"
+1. Seleccionar "Árbol Aditivo (1 matriz, sistemas)"
 2. Cargar una matriz de distancias
 3. Hacer clic en "Ejecutar Algoritmo"
 4. Navegar por los pasos usando los controles
+5. Ver los sistemas de ecuaciones resueltos para cada nodo
 
-### Formato de Matrices
+## Características
 
-Las matrices deben ser:
-- Cuadradas
-- Simétricas
-- Sin valores NaN o infinitos
+- **Visualización Interactiva**:
+  - Navegación paso a paso (anterior/siguiente)
+  - Reproducción automática
+  - Pausa y reanudación
+  - Visualización de grafos, árboles y matrices
 
-Ejemplo de formato CSV:
-```
-0,1,2,3
-1,0,4,5
-2,4,0,6
-3,5,6,0
-```
-
-O formato de texto (separado por espacios):
-```
-0 1 2 3
-1 0 4 5
-2 4 0 6
-3 5 6 0
-```
-
-## Estructura del Proyecto
-
-```
-lab9-bio/
-├── main.py                 # Aplicación principal Tkinter
-├── additive_tree.py        # Módulo de árbol aditivo
-├── ultrametric_tree.py     # Módulo de árbol ultramétrico (Neighbor-Joining)
-├── visualization.py         # Utilidades de visualización
-├── matrix_utils.py         # Utilidades para matrices
-├── requirements.txt        # Dependencias
-└── README.md               # Este archivo
-```
-
-## Controles
-
-- **◄ Anterior**: Retrocede al paso anterior
-- **Siguiente ►**: Avanza al siguiente paso
-- **▶ Automático**: Reproduce todos los pasos automáticamente
-- **⏸ Pausa**: Pausa la reproducción automática
+- **Entrada de Datos**:
+  - Carga desde archivos CSV/TXT
+  - Entrada manual de matrices
+  - Ejemplos predefinidos
 
 ## Notas
 
-- Los algoritmos capturan todos los pasos intermedios para visualización
-- La visualización muestra grafos, árboles y matrices según corresponda
-- El panel de información muestra detalles adicionales de cada paso
+- El árbol ultramétrico usa el algoritmo con spanning tree y cálculo de Cw
+- El árbol aditivo resuelve sistemas de ecuaciones para cada nodo interno
+- Todos los pasos intermedios se capturan para visualización
 

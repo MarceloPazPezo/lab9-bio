@@ -1,5 +1,6 @@
 """
 Aplicación principal para visualización paso a paso de árboles filogenéticos.
+Versión simplificada con 2 algoritmos: Ultramétrico (Mh, Ml) y Aditivo (1 matriz, sistemas de ecuaciones).
 """
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
@@ -9,25 +10,36 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import networkx as nx
 import threading
 import time
+import sys
 
+from ultrametric_tree import UltrametricTreeBuilder
 from additive_tree import AdditiveTreeBuilder
 from matrix_utils import load_matrix_from_file, validate_matrix, parse_matrix_from_text, matrix_to_string
-from matrix_examples import get_additive_examples, get_example_names
 from visualization import draw_graph, draw_tree, draw_matrix, draw_calculation_text, create_canvas, draw_additive_tree
+from matrix_examples import get_ultrametric_examples, get_additive_examples
 
 
-class PhylogeneticTreeApp:
+class TreeApp:
     """Aplicación principal para árboles filogenéticos."""
     
     def __init__(self, root):
         self.root = root
         self.root.title("Árboles Filogenéticos - Visualización Paso a Paso")
         
-        # Iniciar en pantalla completa
-        self.root.state('zoomed')  # En Windows maximiza la ventana
+        # Iniciar en pantalla completa (compatible con Windows y Linux)
+        try:
+            if sys.platform == 'win32':
+                self.root.state('zoomed')
+            else:
+                self.root.attributes('-zoomed', True)
+        except:
+            self.root.update_idletasks()
+            width = self.root.winfo_screenwidth()
+            height = self.root.winfo_screenheight()
+            self.root.geometry(f'{width}x{height}+0+0')
         
         # Variables
-        self.algorithm_type = tk.StringVar(value="additive")
+        self.algorithm_type = tk.StringVar(value="ultrametric")
         self.steps = []
         self.current_step_index = 0
         self.auto_playing = False
@@ -47,23 +59,15 @@ class PhylogeneticTreeApp:
     
     def on_closing(self):
         """Maneja el cierre de la aplicación."""
-        # Detener reproducción automática si está activa
         self.auto_playing = False
-        
-        # Esperar un momento para que el hilo termine
         if hasattr(self, 'auto_thread') and self.auto_thread and self.auto_thread.is_alive():
-            import time
             time.sleep(0.2)
-        
-        # Destruir todas las ventanas toplevel primero
         for widget in self.root.winfo_children():
             if isinstance(widget, tk.Toplevel):
                 try:
                     widget.destroy()
                 except:
                     pass
-        
-        # Cerrar la aplicación
         try:
             self.root.quit()
             self.root.destroy()
@@ -72,11 +76,9 @@ class PhylogeneticTreeApp:
     
     def setup_ui(self):
         """Configura la interfaz de usuario."""
-        # Frame principal
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
-        # Configurar grid
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
@@ -110,12 +112,10 @@ class PhylogeneticTreeApp:
         self.setup_info_panel(info_panel)
         self.setup_matrices_panel(right_panel)
         
-        # Configurar protocolo de cierre
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
     
     def setup_control_panel(self, parent):
         """Configura el panel de controles."""
-        # Título
         title_label = ttk.Label(parent, text="Configuración", font=("Arial", 14, "bold"))
         title_label.grid(row=0, column=0, pady=(0, 20), sticky=tk.W)
         
@@ -123,14 +123,15 @@ class PhylogeneticTreeApp:
         algo_frame = ttk.LabelFrame(parent, text="Algoritmo", padding="10")
         algo_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=5)
         
-        ttk.Radiobutton(algo_frame, text="Árbol Aditivo", variable=self.algorithm_type,
-                       value="additive", command=self.on_algorithm_change).grid(row=0, column=0, sticky=tk.W)
+        ttk.Radiobutton(algo_frame, text="Árbol Ultramétrico (Mh, Ml)", variable=self.algorithm_type,
+                       value="ultrametric", command=self.on_algorithm_change).grid(row=0, column=0, sticky=tk.W)
+        ttk.Radiobutton(algo_frame, text="Árbol Aditivo (1 matriz, sistemas)", variable=self.algorithm_type,
+                       value="additive", command=self.on_algorithm_change).grid(row=1, column=0, sticky=tk.W)
         
         # Entrada de matrices
         matrix_frame = ttk.LabelFrame(parent, text="Entrada de Matrices", padding="10")
         matrix_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=5)
         
-        # Botones de carga
         ttk.Button(matrix_frame, text="Cargar desde Archivo", 
                   command=self.load_from_file).grid(row=0, column=0, pady=5, sticky=(tk.W, tk.E))
         ttk.Button(matrix_frame, text="Entrada Manual", 
@@ -138,7 +139,6 @@ class PhylogeneticTreeApp:
         ttk.Button(matrix_frame, text="Cargar Ejemplo", 
                   command=self.load_example).grid(row=2, column=0, pady=5, sticky=(tk.W, tk.E))
         
-        # Etiquetas de estado
         self.matrix_status_label = ttk.Label(matrix_frame, text="No hay matrices cargadas", 
                                             foreground="red")
         self.matrix_status_label.grid(row=3, column=0, pady=5)
@@ -171,13 +171,11 @@ class PhylogeneticTreeApp:
                                       command=self.pause_auto, state=tk.DISABLED)
         self.pause_button.grid(row=2, column=0, columnspan=2, pady=5, sticky=(tk.W, tk.E))
         
-        # Información del paso
         self.step_info_label = ttk.Label(nav_frame, text="Paso: 0 / 0", font=("Arial", 10))
         self.step_info_label.grid(row=1, column=0, pady=10)
     
     def setup_visualization_panel(self, parent):
         """Configura el panel de visualización."""
-        # Canvas para matplotlib
         self.fig, self.ax = plt.subplots(figsize=(10, 8))
         self.ax.text(0.5, 0.5, "Seleccione un algoritmo y cargue las matrices", 
                     ha='center', va='center', fontsize=14, transform=self.ax.transAxes)
@@ -203,13 +201,11 @@ class PhylogeneticTreeApp:
                                font=("Arial", 14, "bold"))
         title_label.grid(row=0, column=0, pady=(0, 15), sticky=tk.W)
         
-        # Frame para las matrices con scroll
         matrices_frame = ttk.Frame(parent)
         matrices_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         parent.columnconfigure(0, weight=1)
         parent.rowconfigure(1, weight=1)
         
-        # Canvas con scrollbar
         canvas = tk.Canvas(matrices_frame, bg="white", highlightthickness=0)
         scrollbar = ttk.Scrollbar(matrices_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas)
@@ -229,7 +225,6 @@ class PhylogeneticTreeApp:
         self.matrices_frame = scrollable_frame
         self.matrices_container = scrollable_frame
         
-        # Inicializar con mensaje
         self.update_matrices_display()
     
     def on_algorithm_change(self):
@@ -238,38 +233,228 @@ class PhylogeneticTreeApp:
         self.update_matrices_display()
     
     def load_from_file(self):
-        """Carga matrices desde archivo."""
-        # Necesita dos archivos: Mh y Ml
-        filepath = filedialog.askopenfilename(
-            title="Seleccionar matriz Mh (pesos)",
-            filetypes=[("CSV files", "*.csv"), ("Text files", "*.txt"), ("All files", "*.*")]
-        )
-        if filepath:
-            try:
-                self.Mh = load_matrix_from_file(filepath)
-                is_valid, error_msg = validate_matrix(self.Mh, symmetric=True)
-                if not is_valid:
-                    messagebox.showerror("Error", f"Matriz Mh inválida: {error_msg}")
-                    self.Mh = None
-                    return
-                
-                filepath2 = filedialog.askopenfilename(
-                    title="Seleccionar matriz Ml (distancias)",
-                    filetypes=[("CSV files", "*.csv"), ("Text files", "*.txt"), ("All files", "*.*")]
-                )
-                if filepath2:
-                    self.Ml = load_matrix_from_file(filepath2)
-                    is_valid, error_msg = validate_matrix(self.Ml, symmetric=True)
+        """Carga matrices desde archivo según el algoritmo seleccionado."""
+        algo_type = self.algorithm_type.get()
+        
+        if algo_type == "ultrametric":
+            # Necesita dos archivos: Mh y Ml
+            filepath = filedialog.askopenfilename(
+                title="Seleccionar matriz Mh (distancias)",
+                filetypes=[("CSV files", "*.csv"), ("Text files", "*.txt"), ("All files", "*.*")]
+            )
+            if filepath:
+                try:
+                    self.Mh = load_matrix_from_file(filepath)
+                    is_valid, error_msg = validate_matrix(self.Mh, symmetric=True)
                     if not is_valid:
-                        messagebox.showerror("Error", f"Matriz Ml inválida: {error_msg}")
-                        self.Ml = None
+                        messagebox.showerror("Error", f"Matriz Mh inválida: {error_msg}")
+                        self.Mh = None
                         return
                     
-                    if self.Mh.shape != self.Ml.shape:
-                        messagebox.showerror("Error", "Las matrices Mh y Ml deben tener el mismo tamaño")
-                        self.Mh = None
-                        self.Ml = None
+                    filepath2 = filedialog.askopenfilename(
+                        title="Seleccionar matriz Ml (pesos)",
+                        filetypes=[("CSV files", "*.csv"), ("Text files", "*.txt"), ("All files", "*.*")]
+                    )
+                    if filepath2:
+                        self.Ml = load_matrix_from_file(filepath2)
+                        is_valid, error_msg = validate_matrix(self.Ml, symmetric=True)
+                        if not is_valid:
+                            messagebox.showerror("Error", f"Matriz Ml inválida: {error_msg}")
+                            self.Ml = None
+                            return
+                        
+                        if self.Mh.shape != self.Ml.shape:
+                            messagebox.showerror("Error", "Las matrices Mh y Ml deben tener el mismo tamaño")
+                            self.Mh = None
+                            self.Ml = None
+                            return
+                        
+                        self.matrix_status_label.config(
+                            text=f"Matrices cargadas: {self.Mh.shape[0]}x{self.Mh.shape[1]}",
+                            foreground="green"
+                        )
+                        self.execute_button.config(state=tk.NORMAL)
+                        self.update_matrices_display()
+                except Exception as e:
+                    messagebox.showerror("Error", f"Error al cargar archivo: {e}")
+        else:  # additive
+            # Solo una matriz de distancias
+            filepath = filedialog.askopenfilename(
+                title="Seleccionar matriz de distancias",
+                filetypes=[("CSV files", "*.csv"), ("Text files", "*.txt"), ("All files", "*.*")]
+            )
+            if filepath:
+                try:
+                    self.distance_matrix = load_matrix_from_file(filepath)
+                    is_valid, error_msg = validate_matrix(self.distance_matrix, symmetric=True)
+                    if not is_valid:
+                        messagebox.showerror("Error", f"Matriz inválida: {error_msg}")
+                        self.distance_matrix = None
                         return
+                    
+                    self.matrix_status_label.config(
+                        text=f"Matriz cargada: {self.distance_matrix.shape[0]}x{self.distance_matrix.shape[1]}",
+                        foreground="green"
+                    )
+                    self.execute_button.config(state=tk.NORMAL)
+                    self.update_matrices_display()
+                except Exception as e:
+                    messagebox.showerror("Error", f"Error al cargar archivo: {e}")
+    
+    def load_example(self):
+        """Carga un ejemplo predefinido desde un diálogo de selección."""
+        algo_type = self.algorithm_type.get()
+        
+        # Crear ventana de selección
+        selection_window = tk.Toplevel(self.root)
+        selection_window.title("Seleccionar Ejemplo")
+        selection_window.geometry("500x400")
+        selection_window.transient(self.root)
+        selection_window.grab_set()
+        
+        # Centrar ventana
+        selection_window.update_idletasks()
+        x = (selection_window.winfo_screenwidth() // 2) - (500 // 2)
+        y = (selection_window.winfo_screenheight() // 2) - (400 // 2)
+        selection_window.geometry(f"500x400+{x}+{y}")
+        
+        if algo_type == "ultrametric":
+            examples = get_ultrametric_examples()
+            title_text = "Seleccionar Ejemplo - Árbol Ultramétrico"
+        else:  # additive
+            examples = get_additive_examples()
+            title_text = "Seleccionar Ejemplo - Árbol Aditivo"
+        
+        # Título
+        title_label = ttk.Label(selection_window, text=title_text, font=("Arial", 12, "bold"))
+        title_label.pack(pady=10)
+        
+        # Frame para la lista
+        list_frame = ttk.Frame(selection_window)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+        
+        # Lista de ejemplos
+        example_listbox = tk.Listbox(list_frame, font=("Arial", 10), height=12)
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=example_listbox.yview)
+        example_listbox.configure(yscrollcommand=scrollbar.set)
+        
+        example_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Llenar lista
+        example_keys = list(examples.keys())
+        for key in example_keys:
+            example_listbox.insert(tk.END, key)
+        
+        # Descripción
+        desc_label = ttk.Label(selection_window, text="", font=("Arial", 9), foreground="gray", wraplength=450)
+        desc_label.pack(pady=5)
+        
+        def on_select(event):
+            selection = example_listbox.curselection()
+            if selection:
+                idx = selection[0]
+                example_key = example_keys[idx]
+                example = examples[example_key]
+                desc_label.config(text=f"Descripción: {example.get('description', 'Sin descripción')}")
+        
+        example_listbox.bind('<<ListboxSelect>>', on_select)
+        
+        # Botones
+        button_frame = ttk.Frame(selection_window)
+        button_frame.pack(pady=10)
+        
+        def load_selected():
+            selection = example_listbox.curselection()
+            if not selection:
+                messagebox.showwarning("Advertencia", "Por favor seleccione un ejemplo")
+                return
+            
+            idx = selection[0]
+            example_key = example_keys[idx]
+            example = examples[example_key]
+            
+            try:
+                if algo_type == "ultrametric":
+                    self.Mh = example["Mh"].copy()
+                    self.Ml = example["Ml"].copy()
+                    self.node_labels_mh = example.get("labels", None)
+                    self.node_labels_ml = example.get("labels", None)
+                    self.matrix_status_label.config(
+                        text=f"Ejemplo cargado: {example_key} ({self.Mh.shape[0]}x{self.Mh.shape[1]})",
+                        foreground="green"
+                    )
+                else:  # additive
+                    self.distance_matrix = example["matrix"].copy()
+                    self.node_labels = example.get("labels", None)
+                    self.matrix_status_label.config(
+                        text=f"Ejemplo cargado: {example_key} ({self.distance_matrix.shape[0]}x{self.distance_matrix.shape[1]})",
+                        foreground="green"
+                    )
+                
+                self.execute_button.config(state=tk.NORMAL)
+                self.update_matrices_display()
+                selection_window.destroy()
+            except Exception as e:
+                messagebox.showerror("Error", f"Error al cargar ejemplo: {e}")
+        
+        ttk.Button(button_frame, text="Cargar", command=load_selected).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Cancelar", command=selection_window.destroy).pack(side=tk.LEFT, padx=5)
+        
+        # Seleccionar primer elemento por defecto
+        if example_keys:
+            example_listbox.selection_set(0)
+            example_listbox.see(0)
+            on_select(None)
+    
+    def open_manual_input(self):
+        """Abre ventana para entrada manual visual de matrices."""
+        algo_type = self.algorithm_type.get()
+        window = tk.Toplevel(self.root)
+        window.title("Entrada Visual de Matriz")
+        window.geometry("800x700")
+        
+        if algo_type == "ultrametric":
+            # Dos matrices con tabs
+            notebook = ttk.Notebook(window)
+            notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+            
+            frame_mh = ttk.Frame(notebook, padding="10")
+            notebook.add(frame_mh, text="Matriz Mh (Distancias)")
+            self._create_matrix_input_ui(frame_mh, "Mh")
+            
+            frame_ml = ttk.Frame(notebook, padding="10")
+            notebook.add(frame_ml, text="Matriz Ml (Pesos)")
+            self._create_matrix_input_ui(frame_ml, "Ml")
+            
+            def save_matrices():
+                try:
+                    data_mh, labels_mh = self._get_matrix_data(frame_mh)
+                    data_ml, labels_ml = self._get_matrix_data(frame_ml)
+                    
+                    if data_mh is None or data_ml is None:
+                        return
+                    
+                    self.Mh = np.array(data_mh, dtype=float)
+                    self.Ml = np.array(data_ml, dtype=float)
+                    
+                    is_valid_mh, error_mh = validate_matrix(self.Mh, symmetric=True)
+                    is_valid_ml, error_ml = validate_matrix(self.Ml, symmetric=True)
+                    
+                    if not is_valid_mh:
+                        messagebox.showerror("Error", f"Matriz Mh inválida: {error_mh}")
+                        return
+                    if not is_valid_ml:
+                        messagebox.showerror("Error", f"Matriz Ml inválida: {error_ml}")
+                        return
+                    if self.Mh.shape != self.Ml.shape:
+                        messagebox.showerror("Error", "Las matrices deben tener el mismo tamaño")
+                        return
+                    
+                    if labels_mh and all(labels_mh):
+                        self.node_labels_mh = labels_mh
+                    if labels_ml and all(labels_ml):
+                        self.node_labels_ml = labels_ml
                     
                     self.matrix_status_label.config(
                         text=f"Matrices cargadas: {self.Mh.shape[0]}x{self.Mh.shape[1]}",
@@ -277,163 +462,56 @@ class PhylogeneticTreeApp:
                     )
                     self.execute_button.config(state=tk.NORMAL)
                     self.update_matrices_display()
-            except Exception as e:
-                messagebox.showerror("Error", f"Error al cargar archivo: {e}")
-    
-    def load_example(self):
-        """Carga un ejemplo predefinido."""
-        window = tk.Toplevel(self.root)
-        window.title("Seleccionar Ejemplo")
-        window.geometry("500x400")
-        
-        # Frame principal
-        main_frame = ttk.Frame(window, padding="20")
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        ttk.Label(main_frame, text="Seleccione un ejemplo:", 
-                 font=("Arial", 12, "bold")).pack(pady=10)
-        
-        # Lista de ejemplos
-        listbox_frame = ttk.Frame(main_frame)
-        listbox_frame.pack(fill=tk.BOTH, expand=True, pady=10)
-        
-        scrollbar = ttk.Scrollbar(listbox_frame)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        listbox = tk.Listbox(listbox_frame, yscrollcommand=scrollbar.set, font=("Arial", 10))
-        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.config(command=listbox.yview)
-        
-        # Obtener ejemplos aditivos
-        examples = get_additive_examples()
-        
-        # Llenar lista
-        for name, example in examples.items():
-            listbox.insert(tk.END, f"{name} - {example['description']}")
-        
-        # Frame de información
-        info_frame = ttk.LabelFrame(main_frame, text="Información", padding="10")
-        info_frame.pack(fill=tk.X, pady=10)
-        info_label = ttk.Label(info_frame, text="", wraplength=400)
-        info_label.pack()
-        
-        def on_select(event):
-            selection = listbox.curselection()
-            if selection:
-                idx = selection[0]
-                example_name = list(examples.keys())[idx]
-                example = examples[example_name]
-                info_label.config(text=f"Descripción: {example['description']}")
-        
-        listbox.bind('<<ListboxSelect>>', on_select)
-        
-        # Botones
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(pady=10)
-        
-        def load_selected():
-            selection = listbox.curselection()
-            if not selection:
-                messagebox.showwarning("Advertencia", "Por favor seleccione un ejemplo")
-                return
+                    window.destroy()
+                except Exception as e:
+                    messagebox.showerror("Error", f"Error al guardar matrices: {e}")
             
-            idx = selection[0]
-            example_name = list(examples.keys())[idx]
-            example = examples[example_name]
+            button_frame = ttk.Frame(window)
+            button_frame.pack(pady=10)
+            ttk.Button(button_frame, text="Guardar Matrices", command=save_matrices).pack(side=tk.LEFT, padx=5)
+            ttk.Button(button_frame, text="Cancelar", command=window.destroy).pack(side=tk.LEFT, padx=5)
+        else:  # additive
+            # Solo una matriz
+            frame = ttk.Frame(window, padding="10")
+            frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+            self._create_matrix_input_ui(frame, "distance")
             
-            try:
-                self.Mh = example['Mh'].copy()
-                self.Ml = example['Ml'].copy()
-                self.node_labels_mh = example.get('labels', None)
-                self.node_labels_ml = example.get('labels', None)
-                
-                self.matrix_status_label.config(
-                    text=f"Ejemplo cargado: {example_name} ({self.Mh.shape[0]}x{self.Mh.shape[1]})",
-                    foreground="green"
-                )
-                
-                self.execute_button.config(state=tk.NORMAL)
-                self.update_matrices_display()
-                window.destroy()
-            except Exception as e:
-                messagebox.showerror("Error", f"Error al cargar ejemplo: {e}")
-        
-        ttk.Button(button_frame, text="Cargar", command=load_selected).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Cancelar", command=window.destroy).pack(side=tk.LEFT, padx=5)
-    
-    def open_manual_input(self):
-        """Abre ventana para entrada manual visual de matrices."""
-        window = tk.Toplevel(self.root)
-        window.title("Entrada Visual de Matriz")
-        window.geometry("800x700")
-        
-        # Dos matrices con tabs
-        notebook = ttk.Notebook(window)
-        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Tab para Mh
-        frame_mh = ttk.Frame(notebook, padding="10")
-        notebook.add(frame_mh, text="Matriz Mh (Pesos)")
-        self._create_matrix_input_ui(frame_mh, "Mh")
-        
-        # Tab para Ml
-        frame_ml = ttk.Frame(notebook, padding="10")
-        notebook.add(frame_ml, text="Matriz Ml (Distancias)")
-        self._create_matrix_input_ui(frame_ml, "Ml")
-        
-        def save_matrices():
-            try:
-                # Obtener datos de ambas matrices
-                data_mh, labels_mh = self._get_matrix_data(frame_mh)
-                data_ml, labels_ml = self._get_matrix_data(frame_ml)
-                
-                if data_mh is None or data_ml is None:
-                    return
-                
-                self.Mh = np.array(data_mh, dtype=float)
-                self.Ml = np.array(data_ml, dtype=float)
-                
-                is_valid_mh, error_mh = validate_matrix(self.Mh, symmetric=True)
-                is_valid_ml, error_ml = validate_matrix(self.Ml, symmetric=True)
-                
-                if not is_valid_mh:
-                    messagebox.showerror("Error", f"Matriz Mh inválida: {error_mh}")
-                    return
-                if not is_valid_ml:
-                    messagebox.showerror("Error", f"Matriz Ml inválida: {error_ml}")
-                    return
-                if self.Mh.shape != self.Ml.shape:
-                    messagebox.showerror("Error", "Las matrices deben tener el mismo tamaño")
-                    return
-                
-                # Guardar etiquetas si se proporcionaron
-                if labels_mh and all(labels_mh):
-                    self.node_labels_mh = labels_mh
-                if labels_ml and all(labels_ml):
-                    self.node_labels_ml = labels_ml
-                
-                self.matrix_status_label.config(
-                    text=f"Matrices cargadas: {self.Mh.shape[0]}x{self.Mh.shape[1]}",
-                    foreground="green"
-                )
-                self.execute_button.config(state=tk.NORMAL)
-                self.update_matrices_display()
-                window.destroy()
-            except Exception as e:
-                messagebox.showerror("Error", f"Error al guardar matrices: {e}")
-        
-        button_frame = ttk.Frame(window)
-        button_frame.pack(pady=10)
-        ttk.Button(button_frame, text="Guardar Matrices", command=save_matrices).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Cancelar", command=window.destroy).pack(side=tk.LEFT, padx=5)
+            def save_matrix():
+                try:
+                    data, labels = self._get_matrix_data(frame)
+                    if data is None:
+                        return
+                    
+                    self.distance_matrix = np.array(data, dtype=float)
+                    is_valid, error_msg = validate_matrix(self.distance_matrix, symmetric=True)
+                    
+                    if not is_valid:
+                        messagebox.showerror("Error", f"Matriz inválida: {error_msg}")
+                        return
+                    
+                    if labels and all(labels):
+                        self.node_labels = labels
+                    
+                    self.matrix_status_label.config(
+                        text=f"Matriz cargada: {self.distance_matrix.shape[0]}x{self.distance_matrix.shape[1]}",
+                        foreground="green"
+                    )
+                    self.execute_button.config(state=tk.NORMAL)
+                    self.update_matrices_display()
+                    window.destroy()
+                except Exception as e:
+                    messagebox.showerror("Error", f"Error al guardar matriz: {e}")
+            
+            button_frame = ttk.Frame(window)
+            button_frame.pack(pady=10)
+            ttk.Button(button_frame, text="Guardar Matriz", command=save_matrix).pack(side=tk.LEFT, padx=5)
+            ttk.Button(button_frame, text="Cancelar", command=window.destroy).pack(side=tk.LEFT, padx=5)
     
     def _create_matrix_input_ui(self, parent, matrix_type):
         """Crea la interfaz visual para entrada de matriz."""
-        # Frame superior: tamaño y nombres de nodos
         top_frame = ttk.Frame(parent)
         top_frame.pack(fill=tk.X, pady=5)
         
-        # Selector de tamaño
         size_frame = ttk.Frame(top_frame)
         size_frame.pack(side=tk.LEFT, padx=10)
         ttk.Label(size_frame, text="Tamaño de matriz:").pack(side=tk.LEFT, padx=5)
@@ -444,16 +522,13 @@ class PhylogeneticTreeApp:
         ttk.Button(size_frame, text="Crear Matriz", 
                   command=lambda: self._update_matrix_grid(parent, size_var.get(), matrix_type)).pack(side=tk.LEFT, padx=5)
         
-        # Frame para nombres de nodos
         names_frame = ttk.LabelFrame(parent, text="Nombres de Nodos (opcional)", padding="5")
         names_frame.pack(fill=tk.X, pady=5)
         self.node_name_entries = {}
         
-        # Frame para la matriz (con scrollbar)
         matrix_frame = ttk.LabelFrame(parent, text="Matriz", padding="15")
         matrix_frame.pack(fill=tk.BOTH, expand=True, pady=5)
         
-        # Canvas con scrollbar para matrices grandes
         canvas = tk.Canvas(matrix_frame, bg="#F5F5F5", highlightthickness=0)
         scrollbar_v = ttk.Scrollbar(matrix_frame, orient="vertical", command=canvas.yview)
         scrollbar_h = ttk.Scrollbar(matrix_frame, orient="horizontal", command=canvas.xview)
@@ -471,31 +546,26 @@ class PhylogeneticTreeApp:
         scrollbar_v.pack(side="right", fill="y")
         scrollbar_h.pack(side="bottom", fill="x")
         
-        # Almacenar referencias
         parent._matrix_canvas = canvas
         parent._matrix_frame = scrollable_frame
         parent._size_var = size_var
         parent._matrix_type = matrix_type
         parent._matrix_entries = {}
         
-        # Crear matriz inicial
         self._update_matrix_grid(parent, 3, matrix_type)
     
     def _update_matrix_grid(self, parent, size, matrix_type):
         """Actualiza la grilla de la matriz."""
-        # Limpiar frame anterior
         for widget in parent._matrix_frame.winfo_children():
             widget.destroy()
         parent._matrix_entries = {}
         
-        # Buscar frame de nombres de nodos
         names_frame = None
         for widget in parent.winfo_children():
             if isinstance(widget, ttk.LabelFrame):
                 try:
                     if "Nombres" in widget.cget("text"):
                         names_frame = widget
-                        # Limpiar contenido anterior
                         for child in widget.winfo_children():
                             child.destroy()
                         break
@@ -503,7 +573,6 @@ class PhylogeneticTreeApp:
                     pass
         
         if names_frame:
-            # Crear campos de nombres
             names_grid = ttk.Frame(names_frame)
             names_grid.pack(fill=tk.X, padx=5, pady=5)
             parent._node_name_entries = {}
@@ -513,7 +582,6 @@ class PhylogeneticTreeApp:
                 entry = ttk.Entry(names_grid, width=12)
                 entry.grid(row=0, column=i*2+1, padx=5, pady=2)
                 entry.insert(0, f"Node {i+1}")
-                # Actualizar encabezados cuando cambie el nombre
                 def update_headers(idx=i, entry_widget=entry):
                     def on_change(event=None):
                         self._update_matrix_headers(parent)
@@ -521,7 +589,6 @@ class PhylogeneticTreeApp:
                 entry.bind('<KeyRelease>', update_headers())
                 parent._node_name_entries[i] = entry
         
-        # Obtener nombres de nodos si están disponibles
         node_names = {}
         if hasattr(parent, '_node_name_entries'):
             for i in range(size):
@@ -533,16 +600,13 @@ class PhylogeneticTreeApp:
         else:
             node_names = {i: f"Node {i+1}" for i in range(size)}
         
-        # Crear tabla de matriz con estilo visual mejorado
         table_frame = tk.Frame(parent._matrix_frame, bg="#F5F5F5")
         table_frame.grid(row=0, column=0, pady=10)
         
-        # Celda vacía en esquina superior izquierda
         corner_label = tk.Label(table_frame, text="", width=12, height=2, 
                                relief=tk.RAISED, bg="#2E7D32", borderwidth=2)
         corner_label.grid(row=0, column=0, padx=1, pady=1, sticky="nsew")
         
-        # Encabezados de columnas con nombres de nodos
         for j in range(size):
             node_name = node_names.get(j, f"Node {j+1}")
             header_label = tk.Label(table_frame, text=node_name[:10], width=12, height=2,
@@ -550,18 +614,14 @@ class PhylogeneticTreeApp:
                                    font=("Arial", 10, "bold"), borderwidth=2)
             header_label.grid(row=0, column=j+1, padx=1, pady=1, sticky="nsew")
         
-        # Crear filas de la matriz
         for i in range(size):
-            # Encabezado de fila con nombre de nodo
             node_name = node_names.get(i, f"Node {i+1}")
             row_header = tk.Label(table_frame, text=node_name[:10], width=12, height=2,
                                  relief=tk.RAISED, bg="#4CAF50", fg="white",
                                  font=("Arial", 10, "bold"), borderwidth=2)
             row_header.grid(row=i+1, column=0, padx=1, pady=1, sticky="nsew")
             
-            # Celdas de la matriz
             for j in range(size):
-                # Crear frame para la celda con borde
                 cell_frame = tk.Frame(table_frame, bg="#424242", bd=1)
                 cell_frame.grid(row=i+1, column=j+1, padx=1, pady=1, sticky="nsew")
                 
@@ -570,20 +630,17 @@ class PhylogeneticTreeApp:
                                bg="white", fg="black")
                 entry.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
                 
-                # Si es la diagonal, poner 0 y deshabilitar
                 if i == j:
                     entry.insert(0, "0")
                     entry.config(state=tk.DISABLED, bg="#E8E8E8", fg="#666666",
                                font=("Arial", 11, "italic"))
                 else:
                     entry.insert(0, "0")
-                    # Hacer que la matriz sea simétrica automáticamente
                     def make_symmetric(row=i, col=j, entry_widget=entry):
                         def on_change(event=None):
                             try:
                                 val = entry_widget.get()
                                 if val.strip():
-                                    # Actualizar celda simétrica
                                     if (col, row) in parent._matrix_entries:
                                         parent._matrix_entries[(col, row)].delete(0, tk.END)
                                         parent._matrix_entries[(col, row)].insert(0, val)
@@ -596,7 +653,6 @@ class PhylogeneticTreeApp:
                 
                 parent._matrix_entries[(i, j)] = entry
         
-        # Configurar pesos de grid para que las celdas se expandan uniformemente
         for i in range(size + 1):
             table_frame.grid_columnconfigure(i, weight=1, uniform="col")
         for i in range(size + 1):
@@ -607,16 +663,13 @@ class PhylogeneticTreeApp:
         if not hasattr(parent, '_matrix_frame') or not hasattr(parent, '_node_name_entries'):
             return
         
-        # Buscar el frame de la tabla
         widgets = parent._matrix_frame.winfo_children()
         if not widgets:
             return
         
-        # Buscar el table_frame (primer Frame que contiene la tabla)
         table_frame = None
         for widget in widgets:
             if isinstance(widget, tk.Frame):
-                # Verificar si tiene el grid configurado (es nuestra tabla)
                 try:
                     grid_info = widget.grid_info()
                     if grid_info:
@@ -626,7 +679,6 @@ class PhylogeneticTreeApp:
                     pass
         
         if table_frame:
-            # Actualizar encabezados de columnas (fila 0, columnas 1+)
             for j in range(len(parent._node_name_entries)):
                 widget = table_frame.grid_slaves(row=0, column=j+1)
                 if widget and isinstance(widget[0], tk.Label):
@@ -634,7 +686,6 @@ class PhylogeneticTreeApp:
                         name = parent._node_name_entries[j].get().strip()
                         widget[0].config(text=name[:10] if name else f"Node {j+1}")
             
-            # Actualizar encabezados de filas (columna 0, filas 1+)
             for i in range(len(parent._node_name_entries)):
                 widget = table_frame.grid_slaves(row=i+1, column=0)
                 if widget and isinstance(widget[0], tk.Label):
@@ -649,7 +700,6 @@ class PhylogeneticTreeApp:
             data = []
             labels = []
             
-            # Obtener nombres de nodos si existen
             if hasattr(parent, '_node_name_entries'):
                 for i in range(size):
                     if i in parent._node_name_entries:
@@ -660,7 +710,6 @@ class PhylogeneticTreeApp:
             else:
                 labels = [f"Node {i+1}" for i in range(size)]
             
-            # Obtener valores de la matriz
             for i in range(size):
                 row = []
                 for j in range(size):
@@ -681,14 +730,26 @@ class PhylogeneticTreeApp:
     def execute_algorithm(self):
         """Ejecuta el algoritmo seleccionado."""
         try:
-            if self.Mh is None or self.Ml is None:
-                messagebox.showerror("Error", "Debe cargar las matrices Mh y Ml")
-                return
+            algo_type = self.algorithm_type.get()
             
-            # Usar etiquetas de Mh si están disponibles
-            labels = self.node_labels_mh if self.node_labels_mh else None
-            builder = AdditiveTreeBuilder(self.Mh, self.Ml, labels=labels)
-            self.steps = builder.build()
+            if algo_type == "ultrametric":
+                if self.Mh is None or self.Ml is None:
+                    messagebox.showerror("Error", "Debe cargar las matrices Mh y Ml")
+                    return
+                labels = self.node_labels_mh if self.node_labels_mh else None
+                builder = UltrametricTreeBuilder(self.Mh, self.Ml, labels=labels)
+                self.steps = builder.build()
+                
+            elif algo_type == "additive":
+                if self.distance_matrix is None:
+                    messagebox.showerror("Error", "Debe cargar una matriz de distancias")
+                    return
+                labels = self.node_labels if self.node_labels else None
+                builder = AdditiveTreeBuilder(self.distance_matrix, labels=labels)
+                self.steps = builder.build()
+            else:
+                messagebox.showerror("Error", "Algoritmo no reconocido")
+                return
             
             self.current_step_index = 0
             self.update_navigation_buttons()
@@ -718,27 +779,25 @@ class PhylogeneticTreeApp:
         step = self.steps[step_index]
         self.current_step_index = step_index
         
-        # Limpiar axes
         self.ax.clear()
         
-        # Mostrar según el tipo de paso (priorizar grafo/árbol sobre matriz)
-        # Para paso 3, 4 y 5, siempre mostrar la matriz/cálculos aunque haya grafo
+        # Mostrar según el tipo de paso
         if step.get('step') == 3 and 'path_matrix' in step:
-            # Paso 3: mostrar matriz de arcos
+            # Paso 3: mostrar matriz de arcos (ultramétrico)
             matrix = step['path_matrix']
-            if self.algorithm_type.get() == "additive" and hasattr(self, 'node_labels_mh') and self.node_labels_mh:
+            if self.algorithm_type.get() == "ultrametric" and hasattr(self, 'node_labels_mh') and self.node_labels_mh:
                 labels = self.node_labels_mh[:matrix.shape[0]]
             else:
                 labels = [f'Node {i+1}' for i in range(matrix.shape[0])]
             draw_matrix(matrix, self.ax, step.get('title', ''), labels)
         elif step.get('step') == 4 and 'calculation_texts' in step:
-            # Paso 4: mostrar cálculos como texto formateado
+            # Paso 4: mostrar cálculos como texto formateado (ultramétrico)
             calculation_texts = step['calculation_texts']
             draw_calculation_text(calculation_texts, self.ax, step.get('title', ''))
         elif step.get('step') == 5 and 'cw_result_matrix' in step:
-            # Paso 5: mostrar matriz de resultados de Cw (similar al paso 3)
+            # Paso 5: mostrar matriz de resultados de Cw (ultramétrico)
             matrix = step['cw_result_matrix']
-            if self.algorithm_type.get() == "additive" and hasattr(self, 'node_labels_mh') and self.node_labels_mh:
+            if self.algorithm_type.get() == "ultrametric" and hasattr(self, 'node_labels_mh') and self.node_labels_mh:
                 labels = self.node_labels_mh[:matrix.shape[0]]
             else:
                 labels = [f'Node {i+1}' for i in range(matrix.shape[0])]
@@ -746,21 +805,18 @@ class PhylogeneticTreeApp:
         else:
             graph = step.get('graph') or step.get('tree')
             if graph:
-                # Preparar etiquetas - usar labels personalizados si están disponibles
                 node_labels = {}
                 for node in graph.nodes():
-                    # Primero intentar obtener del grafo
                     label = graph.nodes[node].get('label', None)
                     if label:
                         node_labels[node] = str(label)
                     else:
-                        # Si no hay label en el grafo, usar etiquetas personalizadas de la app
-                        if self.algorithm_type.get() == "additive" and hasattr(self, 'node_labels_mh') and self.node_labels_mh:
+                        if self.algorithm_type.get() == "ultrametric" and hasattr(self, 'node_labels_mh') and self.node_labels_mh:
                             if node < len(self.node_labels_mh):
                                 node_labels[node] = str(self.node_labels_mh[node])
                             else:
                                 node_labels[node] = str(node)
-                        elif self.algorithm_type.get() == "ultrametric" and hasattr(self, 'node_labels') and self.node_labels:
+                        elif self.algorithm_type.get() == "additive" and hasattr(self, 'node_labels') and self.node_labels:
                             if node < len(self.node_labels):
                                 node_labels[node] = str(self.node_labels[node])
                             else:
@@ -775,20 +831,21 @@ class PhylogeneticTreeApp:
                     elif 'weight' in graph[u][v]:
                         edge_labels[(u, v)] = f"{graph[u][v]['weight']:.2f}"
                 
-                # Usar draw_additive_tree para árboles aditivos finales (paso 6)
-                if step.get('is_additive_tree', False):
+                # Para árboles aditivos, siempre usar draw_additive_tree
+                # Solo usar draw_additive_tree para árboles ultramétricos
+                # Los árboles aditivos usan la visualización normal de grafo
+                if step.get('is_ultrametric_tree', False):
                     draw_additive_tree(graph, self.ax, step.get('title', ''), 
                                       node_labels, edge_labels)
                 else:
+                    # Visualización normal de grafo para árboles aditivos
                     draw_tree(graph, self.ax, step.get('title', ''), 
                              node_labels, edge_labels)
             elif 'matrix' in step:
-                # Solo mostrar matriz si no hay grafo
                 matrix = step['matrix']
-                # Usar etiquetas personalizadas si están disponibles
-                if self.algorithm_type.get() == "additive" and hasattr(self, 'node_labels_mh') and self.node_labels_mh:
+                if self.algorithm_type.get() == "ultrametric" and hasattr(self, 'node_labels_mh') and self.node_labels_mh:
                     labels = self.node_labels_mh[:matrix.shape[0]]
-                elif self.algorithm_type.get() == "ultrametric" and hasattr(self, 'node_labels') and self.node_labels:
+                elif self.algorithm_type.get() == "additive" and hasattr(self, 'node_labels') and self.node_labels:
                     labels = self.node_labels[:matrix.shape[0]]
                 else:
                     labels = [f'Node {i+1}' for i in range(matrix.shape[0])]
@@ -803,7 +860,9 @@ class PhylogeneticTreeApp:
             for edge_info in step['edges_info']:
                 if 'edge_label' in edge_info:
                     edge_label = edge_info['edge_label']
-                    info_text += f"  Arco {edge_label}: Peso Mh={edge_info['weight_Mh']:.2f}, Cw={edge_info['Cw']:.2f}"
+                    weight_key = 'weight_Ml' if 'weight_Ml' in edge_info else 'weight_Mh'
+                    weight_value = edge_info.get(weight_key, 0)
+                    info_text += f"  Arco {edge_label}: Peso Ml={weight_value:.2f}, Cw={edge_info['Cw']:.2f}"
                     if 'pairs_count' in edge_info:
                         info_text += f" (usado por {edge_info['pairs_count']} pares)\n"
                         if 'pairs_str' in edge_info:
@@ -812,7 +871,9 @@ class PhylogeneticTreeApp:
                         info_text += "\n"
                 else:
                     u, v = edge_info['edge']
-                    info_text += f"  Arco ({u+1}, {v+1}): Peso Mh={edge_info['weight_Mh']:.2f}, Cw={edge_info['Cw']:.2f}\n"
+                    weight_key = 'weight_Ml' if 'weight_Ml' in edge_info else 'weight_Mh'
+                    weight_value = edge_info.get(weight_key, 0)
+                    info_text += f"  Arco ({u+1}, {v+1}): Peso Ml={weight_value:.2f}, Cw={edge_info['Cw']:.2f}\n"
         
         if 'path_matrix' in step:
             info_text += "\nMatriz de arcos (Paso 3):\n"
@@ -822,8 +883,7 @@ class PhylogeneticTreeApp:
             info_text += "\nValores de Cw calculados:\n"
             for edge_key, cw_value in sorted(step['cw_values'].items(), key=lambda x: x[1], reverse=True):
                 u, v = edge_key
-                # Obtener etiquetas de nodos
-                if self.algorithm_type.get() == "additive" and hasattr(self, 'node_labels_mh') and self.node_labels_mh:
+                if self.algorithm_type.get() == "ultrametric" and hasattr(self, 'node_labels_mh') and self.node_labels_mh:
                     label_u = self.node_labels_mh[u] if u < len(self.node_labels_mh) else f"Node {u+1}"
                     label_v = self.node_labels_mh[v] if v < len(self.node_labels_mh) else f"Node {v+1}"
                 else:
@@ -831,23 +891,27 @@ class PhylogeneticTreeApp:
                     label_v = f"Node {v+1}"
                 info_text += f"  ({label_u}{label_v}): {cw_value:.2f}\n"
         
-        if 'Q_matrix' in step:
-            info_text += "\nMatriz Q:\n"
-            info_text += matrix_to_string(step['Q_matrix'], precision=3)
-            info_text += "\n\n"
-            if 'min_pair' in step:
-                i, j = step['min_pair']
-                info_text += f"Par mínimo encontrado: ({i+1}, {j+1})\n"
-        
-        if 'distances' in step:
-            info_text += f"\nDistancias:\n"
-            info_text += f"  Distancia i->u: {step['distances']['i_to_u']:.2f}\n"
-            info_text += f"  Distancia j->u: {step['distances']['j_to_u']:.2f}\n"
+        if 'equation_info' in step:
+            eq_info = step['equation_info']
+            if 'union_info' in eq_info:
+                union = eq_info['union_info']
+                info_text += "\n📊 Información de la Unión:\n"
+                info_text += f"  Nuevo nodo agregado: {union['new_node']}\n"
+                info_text += f"  Arco donde se inserta: {union['edge'][0]} ↔ {union['edge'][1]}\n"
+                info_text += f"  Nodo interno creado: {union['internal_node']}\n"
+                info_text += "\n  Distancias calculadas:\n"
+                for key, dist in union['distances'].items():
+                    info_text += f"    {key}: {dist:.2f}\n"
+            if 'equations' in eq_info:
+                info_text += "\n📐 Sistema de Ecuaciones Resuelto:\n"
+                for eq in eq_info['equations']:
+                    info_text += f"  {eq}\n"
+            elif 'equation' in eq_info:
+                info_text += f"\nEcuación: {eq_info['equation']}\n"
         
         self.info_text.delete("1.0", tk.END)
         self.info_text.insert("1.0", info_text)
         
-        # Actualizar canvas
         self.canvas.draw()
         self.update_step_info()
     
@@ -884,26 +948,22 @@ class PhylogeneticTreeApp:
             if hasattr(self, 'next_button') and self._widget_exists(self.next_button):
                 self.next_button.config(state=tk.DISABLED)
         except (tk.TclError, AttributeError):
-            # Los widgets ya no existen
             self.auto_playing = False
             return
         
         def auto_play():
             try:
                 while self.auto_playing and self.current_step_index < len(self.steps) - 1:
-                    time.sleep(2)  # Esperar 2 segundos entre pasos
+                    time.sleep(2)
                     if self.auto_playing:
                         try:
-                            # Verificar que la ventana aún existe
                             if self._widget_exists(self.root):
                                 self.root.after(0, lambda idx=self.current_step_index + 1: self._safe_show_step(idx))
                             else:
                                 break
                         except (tk.TclError, AttributeError):
-                            # La ventana fue cerrada
                             break
             except (tk.TclError, AttributeError):
-                # La aplicación fue cerrada
                 pass
         
         self.auto_thread = threading.Thread(target=auto_play, daemon=True)
@@ -919,7 +979,6 @@ class PhylogeneticTreeApp:
                 self.pause_button.config(state=tk.DISABLED)
             self.update_navigation_buttons()
         except (tk.TclError, AttributeError):
-            # Los widgets ya no existen, ignorar
             pass
     
     def pause_auto(self):
@@ -947,7 +1006,6 @@ class PhylogeneticTreeApp:
             if hasattr(self, 'auto_button') and self._widget_exists(self.auto_button):
                 self.auto_button.config(state=tk.NORMAL if has_steps else tk.DISABLED)
         except (tk.TclError, AttributeError):
-            # Los widgets ya no existen, ignorar
             pass
     
     def update_step_info(self):
@@ -959,38 +1017,50 @@ class PhylogeneticTreeApp:
                 self.step_info_label.config(text=f"Paso: {current} / {total}")
             self.update_navigation_buttons()
         except (tk.TclError, AttributeError):
-            # Los widgets ya no existen, ignorar
             pass
     
     def update_matrices_display(self):
         """Actualiza el panel de matrices de entrada."""
-        # Limpiar frame anterior
         for widget in self.matrices_container.winfo_children():
             widget.destroy()
         
-        if self.Mh is not None and self.Ml is not None:
-            # Mostrar Mh con mejor formato visual
-            mh_frame = ttk.LabelFrame(self.matrices_container, text="Matriz Mh (Pesos)", padding="5")
-            mh_frame.grid(row=0, column=0, pady=(0, 10), sticky=(tk.W, tk.E))
-            
-            mh_table = self._create_matrix_table(mh_frame, self.Mh, self.node_labels_mh)
-            mh_table.pack(fill=tk.BOTH, expand=True)
-            
-            # Mostrar Ml con mejor formato visual
-            ml_frame = ttk.LabelFrame(self.matrices_container, text="Matriz Ml (Distancias)", padding="5")
-            ml_frame.grid(row=1, column=0, pady=(0, 10), sticky=(tk.W, tk.E))
-            
-            ml_table = self._create_matrix_table(ml_frame, self.Ml, self.node_labels_ml)
-            ml_table.pack(fill=tk.BOTH, expand=True)
-            
-            self.matrices_container.columnconfigure(0, weight=1)
-        else:
-            no_data_label = ttk.Label(self.matrices_container, 
-                                     text="No hay matrices cargadas", 
-                                     foreground="gray", font=("Arial", 10))
-            no_data_label.grid(row=0, column=0, pady=20)
+        algo_type = self.algorithm_type.get()
         
-        # Actualizar scroll region
+        if algo_type == "ultrametric":
+            if self.Mh is not None and self.Ml is not None:
+                mh_frame = ttk.LabelFrame(self.matrices_container, text="Matriz Mh (Distancias)", padding="5")
+                mh_frame.grid(row=0, column=0, pady=(0, 10), sticky=(tk.W, tk.E))
+                
+                mh_table = self._create_matrix_table(mh_frame, self.Mh, self.node_labels_mh)
+                mh_table.pack(fill=tk.BOTH, expand=True)
+                
+                ml_frame = ttk.LabelFrame(self.matrices_container, text="Matriz Ml (Pesos)", padding="5")
+                ml_frame.grid(row=1, column=0, pady=(0, 10), sticky=(tk.W, tk.E))
+                
+                ml_table = self._create_matrix_table(ml_frame, self.Ml, self.node_labels_ml)
+                ml_table.pack(fill=tk.BOTH, expand=True)
+                
+                self.matrices_container.columnconfigure(0, weight=1)
+            else:
+                no_data_label = ttk.Label(self.matrices_container, 
+                                         text="No hay matrices cargadas", 
+                                         foreground="gray", font=("Arial", 10))
+                no_data_label.grid(row=0, column=0, pady=20)
+        else:
+            if self.distance_matrix is not None:
+                matrix_frame = ttk.LabelFrame(self.matrices_container, text="Matriz de Distancias", padding="5")
+                matrix_frame.grid(row=0, column=0, pady=(0, 10), sticky=(tk.W, tk.E))
+                
+                matrix_table = self._create_matrix_table(matrix_frame, self.distance_matrix, self.node_labels)
+                matrix_table.pack(fill=tk.BOTH, expand=True)
+                
+                self.matrices_container.columnconfigure(0, weight=1)
+            else:
+                no_data_label = ttk.Label(self.matrices_container, 
+                                         text="No hay matriz cargada", 
+                                         foreground="gray", font=("Arial", 10))
+                no_data_label.grid(row=0, column=0, pady=20)
+        
         self.matrices_container.update_idletasks()
         self.matrices_canvas.configure(scrollregion=self.matrices_canvas.bbox("all"))
     
@@ -999,11 +1069,9 @@ class PhylogeneticTreeApp:
         if labels is None:
             labels = [f"Node {i+1}" for i in range(matrix.shape[0])]
         
-        # Frame para la tabla con scroll horizontal si es necesario
         outer_frame = tk.Frame(parent)
         outer_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Canvas con scrollbar horizontal
         canvas = tk.Canvas(outer_frame, bg="white", highlightthickness=0)
         h_scrollbar = ttk.Scrollbar(outer_frame, orient="horizontal", command=canvas.xview)
         table_frame = tk.Frame(canvas, bg="white")
@@ -1014,34 +1082,28 @@ class PhylogeneticTreeApp:
         canvas.pack(side="top", fill="both", expand=True)
         h_scrollbar.pack(side="bottom", fill="x")
         
-        # Crear encabezados de columnas
         header_frame = tk.Frame(table_frame, bg="#2E7D32")
         header_frame.pack(fill=tk.X)
         
-        # Celda vacía en esquina - tamaño reducido y cuadrada
         corner = tk.Label(header_frame, text="", width=6, height=1, 
                          bg="#1B5E20", fg="white", font=("Arial", 8, "bold"))
         corner.pack(side=tk.LEFT, padx=1, pady=1)
         
-        # Encabezados de columnas - más pequeños y cuadrados
         for j, label in enumerate(labels):
             header = tk.Label(header_frame, text=str(label)[:6], width=6, height=1,
                             bg="#4CAF50", fg="white", font=("Arial", 8, "bold"),
                             relief=tk.RAISED, bd=1)
             header.pack(side=tk.LEFT, padx=1, pady=1)
         
-        # Crear filas de la matriz
         for i, label in enumerate(labels):
             row_frame = tk.Frame(table_frame, bg="white")
             row_frame.pack(fill=tk.X)
             
-            # Encabezado de fila - más pequeño y cuadrado
             row_header = tk.Label(row_frame, text=str(label)[:6], width=6, height=1,
                                  bg="#4CAF50", fg="white", font=("Arial", 8, "bold"),
                                  relief=tk.RAISED, bd=1)
             row_header.pack(side=tk.LEFT, padx=1, pady=1)
             
-            # Celdas de la matriz - más pequeñas y cuadradas
             for j in range(matrix.shape[1]):
                 val = matrix[i, j]
                 if isinstance(val, (int, float)):
@@ -1049,9 +1111,8 @@ class PhylogeneticTreeApp:
                 else:
                     val_str = str(val)[:6]
                 
-                # Color alternado para mejor legibilidad
                 if i == j:
-                    bg_color = "#E8E8E8"  # Diagonal
+                    bg_color = "#E8E8E8"
                     fg_color = "#666666"
                 elif (i + j) % 2 == 0:
                     bg_color = "#FFFFFF"
@@ -1065,41 +1126,12 @@ class PhylogeneticTreeApp:
                               relief=tk.SUNKEN, bd=1, anchor=tk.CENTER)
                 cell.pack(side=tk.LEFT, padx=1, pady=1)
         
-        # Actualizar scroll region
         def update_scroll(event):
             canvas.configure(scrollregion=canvas.bbox("all"))
         
         table_frame.bind("<Configure>", update_scroll)
         
         return outer_frame
-    
-    def _create_matrix_text(self, matrix, labels=None):
-        """Crea una representación en texto de la matriz."""
-        if labels is None:
-            labels = [f"Node {i+1}" for i in range(matrix.shape[0])]
-        
-        # Calcular ancho de columna
-        max_label_len = max(len(str(l)) for l in labels)
-        col_width = max(max_label_len + 2, 8)
-        
-        # Crear encabezado
-        text = " " * (col_width + 2)  # Espacio para etiqueta de fila
-        for label in labels:
-            text += f"{str(label):>{col_width}} "
-        text += "\n"
-        
-        # Crear filas
-        for i, label in enumerate(labels):
-            text += f"{str(label):>{col_width}} "
-            for j in range(matrix.shape[1]):
-                val = matrix[i, j]
-                if isinstance(val, (int, float)):
-                    text += f"{val:>{col_width}.2f} "
-                else:
-                    text += f"{str(val):>{col_width}} "
-            text += "\n"
-        
-        return text
     
     def reset_state(self):
         """Resetea el estado de la aplicación."""
@@ -1120,13 +1152,12 @@ class PhylogeneticTreeApp:
 def main():
     """Función principal."""
     root = tk.Tk()
-    app = PhylogeneticTreeApp(root)
+    app = TreeApp(root)
     try:
         root.mainloop()
     except KeyboardInterrupt:
         print("\nAplicación cerrada.")
     finally:
-        # Asegurar que el thread de auto-play se detenga
         if hasattr(app, 'auto_playing'):
             app.auto_playing = False
 

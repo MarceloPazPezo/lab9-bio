@@ -1,5 +1,5 @@
 """
-Módulo para construcción de árboles ultramétricos usando Neighbor-Joining.
+Módulo para construcción de árboles ultramétricos usando matrices Mh y Ml.
 """
 import numpy as np
 import networkx as nx
@@ -8,229 +8,521 @@ from typing import List, Dict, Tuple, Any, Optional
 
 class UltrametricTreeBuilder:
     """
-    Constructor de árboles ultramétricos usando algoritmo Neighbor-Joining paso a paso.
+    Constructor de árboles ultramétricos paso a paso usando matrices Mh (distancias) y Ml (pesos).
     """
     
-    def __init__(self, distance_matrix: np.ndarray, labels: Optional[List[str]] = None):
+    def __init__(self, Mh: np.ndarray, Ml: np.ndarray, labels: Optional[List[str]] = None):
         """
-        Inicializa el constructor con la matriz de distancias.
+        Inicializa el constructor con las matrices de distancias y pesos.
         
         Args:
-            distance_matrix: Matriz de distancias
+            Mh: Matriz de distancias (distancias entre nodos)
+            Ml: Matriz de pesos (pesos de los arcos)
             labels: Etiquetas para los nodos (opcional)
         """
-        self.distance_matrix = distance_matrix.copy()
-        self.n = distance_matrix.shape[0]
+        self.Mh = Mh.copy()
+        self.Ml = Ml.copy()
+        self.n = Mh.shape[0]
+        self.cw = Mh.shape[0]
         self.labels = labels if labels else [f'Node {i+1}' for i in range(self.n)]
         self.steps = []
-        self.current_matrix = distance_matrix.copy()
-        self.node_counter = self.n
-        self.tree = nx.Graph()
-        self.node_distances = {}  # Almacena distancias de nodos a raíz
+        self.current_step = 0
         
     def build(self) -> List[Dict[str, Any]]:
         """
-        Construye el árbol ultramétrico paso a paso usando Neighbor-Joining.
+        Construye el árbol ultramétrico paso a paso.
         
         Returns:
             Lista de pasos con información para visualización
         """
         self.steps = []
         
-        # Inicializar árbol con nodos hoja
-        for i in range(self.n):
-            self.tree.add_node(i, label=self.labels[i], is_leaf=True)
+        # Paso 1: Grafo inicial desde Ml (pesos)
+        step1 = self._create_initial_graph()
+        self.steps.append(step1)
         
-        # Paso inicial: mostrar matriz original
-        step0 = {
-            'step': 0,
-            'title': 'Paso 0: Matriz de Distancias Inicial',
-            'matrix': self.current_matrix.copy(),
-            'description': f'Matriz de distancias inicial con {self.n} nodos',
-            'tree': self.tree.copy()
-        }
-        self.steps.append(step0)
+        # Paso 2: Spanning tree sin ciclos
+        step2 = self._create_spanning_tree()
+        self.steps.append(step2)
         
-        # Iterar hasta que queden 2 nodos
-        iteration = 1
-        current_labels = self.labels.copy()
-        current_matrix = self.current_matrix.copy()
-        active_nodes = list(range(self.n))
+        # Paso 3: Identificar arcos de mayor valor
+        step3 = self._identify_max_edges()
+        self.steps.append(step3)
         
-        while len(active_nodes) > 2:
-            # Calcular matriz Q
-            Q_matrix = self._calculate_Q_matrix(current_matrix)
-            
-            # Encontrar par de nodos más cercanos
-            min_i, min_j = self._find_min_pair(Q_matrix, current_matrix.shape[0])
-            
-            # Crear nuevo nodo interno
-            new_node = self.node_counter
-            self.node_counter += 1
-            
-            # Calcular distancias del nuevo nodo a los nodos existentes
-            u_distances = self._calculate_u_distances(current_matrix, min_i, min_j, current_matrix.shape[0])
-            
-            # Actualizar árbol
-            node_i = active_nodes[min_i]
-            node_j = active_nodes[min_j]
-            
-            # Calcular distancias de las hojas al nuevo nodo
-            dist_i_to_u = 0.5 * (current_matrix[min_i, min_j] + 
-                                (np.sum(current_matrix[min_i, :]) - np.sum(current_matrix[min_j, :])) / 
-                                (len(active_nodes) - 2))
-            dist_j_to_u = current_matrix[min_i, min_j] - dist_i_to_u
-            
-            self.tree.add_node(new_node, label=f'U{new_node}', is_leaf=False)
-            self.tree.add_edge(node_i, new_node, distance=dist_i_to_u)
-            self.tree.add_edge(node_j, new_node, distance=dist_j_to_u)
-            
-            # Crear nueva matriz de distancias
-            new_matrix, new_labels, new_active_nodes = self._update_distance_matrix(
-                current_matrix, current_labels, active_nodes, min_i, min_j, new_node, u_distances
-            )
-            
-            # Guardar paso
-            step = {
-                'step': iteration,
-                'title': f'Paso {iteration}: Unión de {current_labels[min_i]} y {current_labels[min_j]}',
-                'matrix': current_matrix.copy(),
-                'Q_matrix': Q_matrix,
-                'min_pair': (min_i, min_j),
-                'new_node': new_node,
-                'distances': {
-                    'i_to_u': dist_i_to_u,
-                    'j_to_u': dist_j_to_u
-                },
-                'description': f'Se unen {current_labels[min_i]} y {current_labels[min_j]} creando nodo U{new_node}',
-                'tree': self.tree.copy(),
-                'new_matrix': new_matrix.copy()
-            }
-            self.steps.append(step)
-            
-            # Actualizar para siguiente iteración
-            current_matrix = new_matrix
-            current_labels = new_labels
-            active_nodes = new_active_nodes
-            iteration += 1
+        # Paso 4: Calcular Cw para cada arco usando Mh (distancias)
+        step4 = self._calculate_cw()
+        self.steps.append(step4)
         
-        # Paso final: unir los dos últimos nodos
-        if len(active_nodes) == 2:
-            node_i = active_nodes[0]
-            node_j = active_nodes[1]
-            final_distance = current_matrix[0, 1]
-            
-            # Si no hay raíz, crear una
-            if not any(not self.tree.nodes[n].get('is_leaf', True) for n in self.tree.nodes()):
-                root = self.node_counter
-                self.tree.add_node(root, label='Root', is_leaf=False)
-                self.tree.add_edge(node_i, root, distance=final_distance / 2)
-                self.tree.add_edge(node_j, root, distance=final_distance / 2)
-            else:
-                # Conectar directamente
-                self.tree.add_edge(node_i, node_j, distance=final_distance)
+        # Paso 5: Crear matriz con resultados de Cw
+        step5 = self._create_cw_matrix()
+        self.steps.append(step5)
         
-        # Paso final
-        final_step = {
-            'step': iteration,
-            'title': 'Paso Final: Árbol Ultramétrico Completo',
-            'matrix': current_matrix.copy(),
-            'description': 'Árbol ultramétrico completo construido',
-            'tree': self.tree.copy()
-        }
-        self.steps.append(final_step)
+        # Paso 6: Crear árbol final
+        step6 = self._create_final_tree()
+        self.steps.append(step6)
         
         return self.steps
     
-    def _calculate_Q_matrix(self, matrix: np.ndarray) -> np.ndarray:
-        """
-        Calcula la matriz Q para Neighbor-Joining.
-        Q(i,j) = (n-2)*d(i,j) - sum(d(i,k)) - sum(d(j,k))
-        """
-        n = matrix.shape[0]
-        Q = np.zeros_like(matrix, dtype=float)
+    def _create_initial_graph(self) -> Dict[str, Any]:
+        """Paso 1: Crear grafo inicial desde matriz Ml (pesos)."""
+        G = nx.Graph()
         
-        for i in range(n):
-            for j in range(i + 1, n):
-                sum_i = np.sum(matrix[i, :])
-                sum_j = np.sum(matrix[j, :])
-                Q[i, j] = (n - 2) * matrix[i, j] - sum_i - sum_j
-                Q[j, i] = Q[i, j]
+        # Agregar nodos
+        for i in range(self.n):
+            G.add_node(i, label=self.labels[i])
         
-        # Diagonal en infinito para evitar seleccionarla
-        np.fill_diagonal(Q, np.inf)
-        return Q
+        # Agregar arcos con pesos de Ml
+        for i in range(self.n):
+            for j in range(i + 1, self.n):
+                if self.Ml[i, j] > 0:
+                    G.add_edge(i, j, weight=self.Ml[i, j])
+        
+        return {
+            'step': 1,
+            'title': 'Paso 1: Grafo Inicial (Matriz Ml - Pesos)',
+            'graph': G,
+            'matrix': self.Ml,
+            'description': f'Grafo completo con {G.number_of_nodes()} nodos y {G.number_of_edges()} arcos'
+        }
     
-    def _find_min_pair(self, Q_matrix: np.ndarray, n: int) -> Tuple[int, int]:
-        """Encuentra el par de nodos con menor valor en Q."""
-        min_val = np.inf
-        min_i, min_j = 0, 1
+    def _create_spanning_tree(self) -> Dict[str, Any]:
+        """Paso 2: Generar spanning tree sin ciclos."""
+        # Crear grafo completo con pesos de Ml
+        G_full = nx.Graph()
+        for i in range(self.n):
+            G_full.add_node(i, label=self.labels[i])
+        for i in range(self.n):
+            for j in range(i + 1, self.n):
+                G_full.add_edge(i, j, weight=self.Ml[i, j])
         
-        for i in range(n):
-            for j in range(i + 1, n):
-                if Q_matrix[i, j] < min_val:
-                    min_val = Q_matrix[i, j]
-                    min_i, min_j = i, j
+        # Usar algoritmo de Kruskal para encontrar spanning tree
+        T = nx.minimum_spanning_tree(G_full, weight='weight', algorithm='kruskal')
+        # Copiar labels a T
+        for node in T.nodes():
+            if node in G_full.nodes() and 'label' in G_full.nodes[node]:
+                T.nodes[node]['label'] = G_full.nodes[node]['label']
+            elif node < len(self.labels):
+                T.nodes[node]['label'] = self.labels[node]
         
-        return min_i, min_j
+        return {
+            'step': 2,
+            'title': 'Paso 2: Spanning Tree sin Ciclos',
+            'graph': T,
+            'matrix': self.Ml,
+            'description': f'Árbol de expansión mínima con {T.number_of_edges()} arcos',
+            'edges': list(T.edges(data=True))
+        }
     
-    def _calculate_u_distances(self, matrix: np.ndarray, i: int, j: int, n: int) -> np.ndarray:
-        """
-        Calcula las distancias del nuevo nodo u a todos los demás nodos.
-        d(u,k) = 0.5 * (d(i,k) + d(j,k) - d(i,j))
-        """
-        u_distances = np.zeros(n)
-        for k in range(n):
-            if k != i and k != j:
-                u_distances[k] = 0.5 * (matrix[i, k] + matrix[j, k] - matrix[i, j])
-        return u_distances
+    def _find_path_edges(self, T, source, target):
+        """Encuentra los arcos en el camino entre source y target en el árbol T."""
+        try:
+            path = nx.shortest_path(T, source, target)
+            edges_in_path = []
+            for i in range(len(path) - 1):
+                edges_in_path.append((path[i], path[i+1]))
+            return edges_in_path
+        except:
+            return []
     
-    def _update_distance_matrix(self, matrix: np.ndarray, labels: List[str],
-                               active_nodes: List[int], i: int, j: int,
-                               new_node: int, u_distances: np.ndarray) -> Tuple[np.ndarray, List[str], List[int]]:
-        """
-        Actualiza la matriz de distancias después de unir dos nodos.
-        """
-        n = matrix.shape[0]
-        new_n = n - 1
-        new_matrix = np.zeros((new_n, new_n))
-        new_labels = []
-        new_active_nodes = []
+    def _get_max_weight_edge(self, T):
+        """Obtiene el arco de mayor peso en el spanning tree."""
+        max_weight = -1
+        max_edge = None
+        for u, v in T.edges():
+            weight = T[u][v].get('weight', self.Ml[u, v])
+            if weight > max_weight:
+                max_weight = weight
+                max_edge = (u, v)
+        return max_edge, max_weight
+    
+    def _identify_max_edges(self) -> Dict[str, Any]:
+        """Paso 3: Crear matriz con arcos de mayor valor para cada par de nodos."""
+        # Obtener spanning tree del paso anterior
+        G_full = nx.Graph()
+        for i in range(self.n):
+            G_full.add_node(i, label=self.labels[i])
+        for i in range(self.n):
+            for j in range(i + 1, self.n):
+                G_full.add_edge(i, j, weight=self.Ml[i, j])
         
-        # Agregar nuevo nodo
-        new_labels.append(f'U{new_node}')
-        new_active_nodes.append(new_node)
+        T = nx.minimum_spanning_tree(G_full, weight='weight', algorithm='kruskal')
+        # Copiar labels a T
+        for node in T.nodes():
+            if node in G_full.nodes() and 'label' in G_full.nodes[node]:
+                T.nodes[node]['label'] = G_full.nodes[node]['label']
+            elif node < len(self.labels):
+                T.nodes[node]['label'] = self.labels[node]
         
-        # Copiar distancias de otros nodos
-        new_idx = 1
-        old_to_new = {}
-        for k in range(n):
-            if k != i and k != j:
-                old_to_new[k] = new_idx
-                new_labels.append(labels[k])
-                new_active_nodes.append(active_nodes[k])
-                new_idx += 1
+        # Encontrar el arco de mayor peso
+        max_edge, max_weight = self._get_max_weight_edge(T)
         
-        # Llenar nueva matriz
-        # Distancia del nuevo nodo a los demás
-        new_idx = 1
-        for k in range(n):
-            if k != i and k != j:
-                new_matrix[0, new_idx] = u_distances[k]
-                new_matrix[new_idx, 0] = u_distances[k]
-                new_idx += 1
+        # Crear matriz que muestra qué arco se usa para cada par de nodos
+        path_matrix = np.zeros((self.n, self.n), dtype=object)
+        edge_usage = {}
         
-        # Distancias entre nodos existentes
-        for k in range(n):
-            if k != i and k != j:
-                for l in range(k + 1, n):
-                    if l != i and l != j:
-                        new_k = old_to_new[k]
-                        new_l = old_to_new[l]
-                        new_matrix[new_k, new_l] = matrix[k, l]
-                        new_matrix[new_l, new_k] = matrix[k, l]
+        for i in range(self.n):
+            for j in range(self.n):
+                if i >= j:
+                    path_matrix[i, j] = '-'
+                else:
+                    # Encontrar camino entre i y j
+                    path_edges = self._find_path_edges(T, i, j)
+                    if path_edges:
+                        # Encontrar el arco de mayor peso en el camino
+                        max_edge_in_path = None
+                        max_w = -1
+                        for edge in path_edges:
+                            u, v = edge
+                            w = self.Ml[u, v]
+                            if w > max_w:
+                                max_w = w
+                                max_edge_in_path = edge
+                        
+                        if max_edge_in_path:
+                            u, v = max_edge_in_path
+                            label_u = self.labels[u]
+                            label_v = self.labels[v]
+                            path_matrix[i, j] = f"({label_u}{label_v})"
+                            
+                            edge_key = tuple(sorted(max_edge_in_path))
+                            if edge_key not in edge_usage:
+                                edge_usage[edge_key] = []
+                            edge_usage[edge_key].append((i, j))
+                    else:
+                        path_matrix[i, j] = '-'
         
-        return new_matrix, new_labels, new_active_nodes
+        edges_with_weights = [(u, v, self.Ml[u, v]) for u, v in T.edges()]
+        edges_with_weights.sort(key=lambda x: x[2], reverse=True)
+        
+        description = f"Arco de mayor peso: {self.labels[max_edge[0]]}{self.labels[max_edge[1]]} (peso: {max_weight:.2f})\n"
+        description += f"Matriz muestra el arco de mayor peso usado en el camino entre cada par de nodos."
+        self.cw = path_matrix
+        return {
+            'step': 3,
+            'title': 'Paso 3: Matriz con Arcos de Mayor Valor',
+            'graph': None,
+            'matrix': path_matrix,
+            'path_matrix': path_matrix,
+            'description': description,
+            'max_edge': max_edge,
+            'max_weight': max_weight,
+            'edges_ordered': edges_with_weights,
+            'edge_usage': edge_usage
+        }
+    
+    def _calculate_cw(self) -> Dict[str, Any]:
+        """Paso 4: Calcular Cw para cada arco usando el máximo de distancias de pares que lo usan."""
+        if not hasattr(self, 'cw') or self.cw is None:
+            return {
+                'step': 4,
+                'title': 'Paso 4: Cálculo de Cw para cada Arco',
+                'graph': None,
+                'matrix': None,
+                'calculation_texts': [],
+                'description': 'Error: No se encontró la matriz del paso 3',
+                'cw_values': {},
+                'edges_info': [],
+                'edge_pairs': {}
+            }
+        
+        path_matrix = self.cw
+        
+        G_full = nx.Graph()
+        for i in range(self.n):
+            G_full.add_node(i, label=self.labels[i])
+        for i in range(self.n):
+            for j in range(i + 1, self.n):
+                G_full.add_edge(i, j, weight=self.Ml[i, j])
+        
+        T = nx.minimum_spanning_tree(G_full, weight='weight', algorithm='kruskal')
+        for node in T.nodes():
+            if node in G_full.nodes() and 'label' in G_full.nodes[node]:
+                T.nodes[node]['label'] = G_full.nodes[node]['label']
+            elif node < len(self.labels):
+                T.nodes[node]['label'] = self.labels[node]
+        
+        unique_edges = set()
+        for i in range(self.n):
+            for j in range(i + 1, self.n):
+                cell_value = path_matrix[i, j]
+                if cell_value != '-' and isinstance(cell_value, str):
+                    edge_str = cell_value.strip('()')
+                    if edge_str:
+                        for u in range(self.n):
+                            for v in range(u + 1, self.n):
+                                label_u = self.labels[u]
+                                label_v = self.labels[v]
+                                if edge_str == f"{label_u}{label_v}" or edge_str == f"{label_v}{label_u}":
+                                    unique_edges.add(tuple(sorted([u, v])))
+        
+        cw_values = {}
+        edges_info = []
+        edge_pairs = {}
+        
+        for edge_key in unique_edges:
+            u, v = edge_key
+            pairs_using_edge = []
+            distances_list = []
+            
+            label_u = self.labels[u]
+            label_v = self.labels[v]
+            edge_label = f"{label_u}{label_v}"
+            
+            for i in range(self.n):
+                for j in range(i + 1, self.n):
+                    cell_value = path_matrix[i, j]
+                    if cell_value == f"({edge_label})" or cell_value == f"({label_v}{label_u})":
+                        pairs_using_edge.append((i, j))
+                        dist = self.Mh[i, j]  # Mh es distancia
+                        distances_list.append(dist)
+            
+            max_dist = max(distances_list) if distances_list else 0.0
+            cw_values[edge_key] = max_dist
+            edge_pairs[edge_key] = pairs_using_edge
+            
+            pairs_labels = [f"{self.labels[p[0]]}{self.labels[p[1]]}" for p in pairs_using_edge]
+            pairs_str = '; '.join(pairs_labels)
+            distances_str = '{' + ', '.join([f"{d:.2f}" for d in distances_list]) + '}'
+            
+            edges_info.append({
+                'edge': (u, v),
+                'edge_label': edge_label,
+                'weight_Ml': self.Ml[u, v],  # Ml es peso
+                'Cw': max_dist,
+                'pairs_count': len(pairs_using_edge),
+                'pairs': pairs_using_edge,
+                'pairs_labels': pairs_labels,
+                'distances': distances_list,
+                'pairs_str': pairs_str,
+                'distances_str': distances_str,
+                'max_distance': max_dist
+            })
+        
+        calculation_texts = []
+        for info in edges_info:
+            calc_text = f"CW[{info['edge_label']}] = "
+            calc_text += '{' + info['pairs_str'] + '} = '
+            calc_text += info['distances_str']
+            calc_text += f" → Max: {info['max_distance']:.2f}"
+            calculation_texts.append(calc_text)
+        
+        description = f"Cálculo de Cw para {len(edges_info)} arcos únicos del paso 3:\n\n"
+        for info in edges_info:
+            description += f"CW[{info['edge_label']}] = "
+            description += '{' + info['pairs_str'] + '} = '
+            description += info['distances_str']
+            description += f" → Max: {info['max_distance']:.2f}\n"
+        
+        return {
+            'step': 4,
+            'title': 'Paso 4: Cálculo de Cw para cada Arco',
+            'graph': None,
+            'matrix': None,
+            'calculation_texts': calculation_texts,
+            'description': description,
+            'cw_values': cw_values,
+            'edges_info': edges_info,
+            'edge_pairs': edge_pairs
+        }
+    
+    def _create_cw_matrix(self) -> Dict[str, Any]:
+        """Paso 5: Crear matriz con resultados de Cw."""
+        if not hasattr(self, 'cw') or self.cw is None:
+            return {
+                'step': 5,
+                'title': 'Paso 5: Matriz con Resultados de Cw',
+                'graph': None,
+                'matrix': np.zeros((self.n, self.n)),
+                'description': 'Error: No se encontró la matriz del paso 3',
+                'cw_matrix': np.zeros((self.n, self.n)),
+                'cw_values': {}
+            }
+        
+        path_matrix = self.cw
+        unique_edges_cw = {}
+        
+        for i in range(self.n):
+            for j in range(i + 1, self.n):
+                cell_value = path_matrix[i, j]
+                if cell_value != '-' and isinstance(cell_value, str):
+                    edge_str = cell_value.strip('()')
+                    if edge_str:
+                        for u in range(self.n):
+                            for v in range(u + 1, self.n):
+                                label_u = self.labels[u]
+                                label_v = self.labels[v]
+                                if edge_str == f"{label_u}{label_v}" or edge_str == f"{label_v}{label_u}":
+                                    edge_key = tuple(sorted([u, v]))
+                                    if edge_key not in unique_edges_cw:
+                                        distances_list = []
+                                        for ii in range(self.n):
+                                            for jj in range(ii + 1, self.n):
+                                                cell_val = path_matrix[ii, jj]
+                                                if cell_val == f"({label_u}{label_v})" or cell_val == f"({label_v}{label_u})":
+                                                    dist = self.Mh[ii, jj]  # Mh es distancia
+                                                    distances_list.append(dist)
+                                        max_dist = max(distances_list) if distances_list else 0.0
+                                        unique_edges_cw[edge_key] = max_dist
+        
+        cw_result_matrix = np.zeros((self.n, self.n), dtype=object)
+        for i in range(self.n):
+            for j in range(self.n):
+                if i >= j:
+                    cw_result_matrix[i, j] = '-'
+                else:
+                    cell_value = path_matrix[i, j]
+                    if cell_value != '-' and isinstance(cell_value, str):
+                        edge_str = cell_value.strip('()')
+                        if edge_str:
+                            for edge_key, cw_value in unique_edges_cw.items():
+                                u, v = edge_key
+                                label_u = self.labels[u]
+                                label_v = self.labels[v]
+                                if edge_str == f"{label_u}{label_v}" or edge_str == f"{label_v}{label_u}":
+                                    cw_result_matrix[i, j] = cw_value
+                                    break
+                            else:
+                                cw_result_matrix[i, j] = '-'
+                        else:
+                            cw_result_matrix[i, j] = '-'
+                    else:
+                        cw_result_matrix[i, j] = '-'
+        
+        description = "Matriz con valores Cw (máximos) para cada par de nodos:\n\n"
+        description += "Valores Cw calculados por arco:\n"
+        for edge_key, cw_value in sorted(unique_edges_cw.items(), key=lambda x: x[1], reverse=True):
+            u, v = edge_key
+            label_u = self.labels[u]
+            label_v = self.labels[v]
+            description += f"  ({label_u}{label_v}): Cw = {cw_value:.2f}\n"
+        
+        return {
+            'step': 5,
+            'title': 'Paso 5: Matriz con Resultados de Cw',
+            'graph': None,
+            'matrix': cw_result_matrix,
+            'description': description,
+            'cw_matrix': cw_result_matrix,
+            'cw_values': unique_edges_cw,
+            'cw_result_matrix': cw_result_matrix
+        }
+    
+    def _create_final_tree(self) -> Dict[str, Any]:
+        """Paso 6: Crear árbol final usando valores máximos de Cw."""
+        G_full = nx.Graph()
+        for i in range(self.n):
+            G_full.add_node(i, label=self.labels[i])
+        for i in range(self.n):
+            for j in range(i + 1, self.n):
+                G_full.add_edge(i, j, weight=self.Ml[i, j])  # Ml es peso
+
+        T = nx.minimum_spanning_tree(G_full, weight='weight', algorithm='kruskal')
+        for node in T.nodes():
+            if node in G_full.nodes() and 'label' in G_full.nodes[node]:
+                T.nodes[node]['label'] = G_full.nodes[node]['label']
+            elif node < len(self.labels):
+                T.nodes[node]['label'] = self.labels[node]
+        
+        if not hasattr(self, 'cw') or self.cw is None:
+            return {
+                'step': 6,
+                'title': 'Paso 6: Árbol Ultramétrico Final',
+                'graph': T,
+                'tree': T,
+                'matrix': None,
+                'description': 'Error: No se encontró información del paso 3',
+                'cw_values': {},
+                'max_cw_edge': None,
+                'max_cw_value': 0,
+                'edge_distances': {}
+            }
+        
+        path_matrix = self.cw
+        unique_edges_cw = {}
+        
+        for i in range(self.n):
+            for j in range(i + 1, self.n):
+                cell_value = path_matrix[i, j]
+                if cell_value != '-' and isinstance(cell_value, str):
+                    edge_str = cell_value.strip('()')
+                    if edge_str:
+                        for u in range(self.n):
+                            for v in range(u + 1, self.n):
+                                label_u = self.labels[u]
+                                label_v = self.labels[v]
+                                if edge_str == f"{label_u}{label_v}" or edge_str == f"{label_v}{label_u}":
+                                    edge_key = tuple(sorted([u, v]))
+                                    if edge_key not in unique_edges_cw:
+                                        distances_list = []
+                                        for ii in range(self.n):
+                                            for jj in range(ii + 1, self.n):
+                                                cell_val = path_matrix[ii, jj]
+                                                if cell_val == f"({label_u}{label_v})" or cell_val == f"({label_v}{label_u})":
+                                                    dist = self.Mh[ii, jj]  # Mh es distancia
+                                                    distances_list.append(dist)
+                                        max_dist = max(distances_list) if distances_list else 0.0
+                                        unique_edges_cw[edge_key] = max_dist
+        
+        cw_values = unique_edges_cw
+        
+        if cw_values:
+            max_cw_edge = max(cw_values.items(), key=lambda x: x[1])
+            max_cw_value = max_cw_edge[1]
+            max_edge = max_cw_edge[0]
+        else:
+            max_edge = None
+            max_cw_value = 0
+        
+        edge_distances = {}
+        distribution_info = []
+        
+        for edge_key, cw_max in cw_values.items():
+            u, v = edge_key
+            dist_u = cw_max / 2.0
+            dist_v = cw_max / 2.0
+            edge_distances[edge_key] = (dist_u, dist_v)
+            
+            label_u = self.labels[u]
+            label_v = self.labels[v]
+            
+            if edge_key == max_edge:
+                distribution_info.append(
+                    f"Arco {label_u}{label_v}: Cw={cw_max:.2f} (máximo) → "
+                    f"Distancia por lado: {dist_u:.2f}"
+                )
+            else:
+                distribution_info.append(
+                    f"Arco {label_u}{label_v}: Cw={cw_max:.2f} → "
+                    f"Distancia por lado: {dist_u:.2f}"
+                )
+            
+            if T.has_edge(u, v):
+                T[u][v]['distance'] = dist_u
+                T[u][v]['weight'] = self.Ml[u, v]  # Ml es peso
+                T[u][v]['cw'] = cw_max
+        
+        description = "Árbol Ultramétrico Final\n\n"
+        if max_edge:
+            description += f"Arco con mayor Cw: {self.labels[max_edge[0]]}{self.labels[max_edge[1]]} "
+            description += f"(Cw = {max_cw_value:.2f})\n"
+            description += f"Distancia por lado: {max_cw_value/2.0:.2f}\n\n"
+        description += "Distribución de valores (usando máximos de Cw):\n"
+        for info in distribution_info:
+            description += f"  {info}\n"
+        
+        return {
+            'step': 6,
+            'title': 'Paso 6: Árbol Ultramétrico Final',
+            'graph': T,
+            'tree': T,
+            'matrix': None,
+            'description': description,
+            'cw_values': cw_values,
+            'max_cw_edge': max_edge,
+            'max_cw_value': max_cw_value,
+            'edge_distances': edge_distances,
+            'is_ultrametric_tree': True
+        }
     
     def get_step(self, step_index: int) -> Dict[str, Any]:
         """Obtiene un paso específico."""
